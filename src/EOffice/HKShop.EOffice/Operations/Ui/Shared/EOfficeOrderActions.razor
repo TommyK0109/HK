@@ -1,0 +1,79 @@
+@if (Status == OrderStatus.Confirmed)
+{
+    <form class="form-stack top-space" method="post" action="@($"{ActionPath}/pack")">
+        <AntiforgeryToken />
+        @SellerOrderField
+        <button class="button" type="submit">Start packing</button>
+    </form>
+    <form class="form-stack top-space" method="post" action="@($"{ActionPath}/cancel")">
+        <AntiforgeryToken />
+        @SellerOrderField
+        <label>Cancellation reason <input name="reason" maxlength="250" /></label>
+        <button class="button secondary" type="submit">Cancel order</button>
+    </form>
+}
+@if (Status == OrderStatus.Packing && Parcel is null)
+{
+    <form class="form-stack top-space" method="post" action="@($"{ActionPath}/dispatch")">
+        <AntiforgeryToken />
+        @SellerOrderField
+        <label>Carrier <input name="carrier" maxlength="80" required /></label>
+        <label>Tracking number <input name="tracking" maxlength="80" required /></label>
+        <button class="button" type="submit">Dispatch order</button>
+    </form>
+}
+@if (Status == OrderStatus.Shipped)
+{
+    @if (Parcel is null)
+    {
+        <form class="form-stack top-space" method="post" action="@($"{ActionPath}/deliver")">
+            <AntiforgeryToken />
+            @SellerOrderField
+            @if (Method == PaymentMethod.Cod)
+            {
+                <label>Cash collected (VND) <input name="collected" type="number" min="1" step="1" value="@ShopDisplay.Number(TotalVnd)" required /></label>
+                <label>Collection receipt code <input name="reference" maxlength="80" required /></label>
+            }
+            <button class="button" type="submit">Confirm delivery</button>
+        </form>
+        <form class="form-stack top-space" method="post" action="@($"{ActionPath}/exception")">
+            <AntiforgeryToken />
+            @SellerOrderField
+            <label>Delivery incident note <input name="note" maxlength="250" required /></label>
+            <button class="button secondary" type="submit">Record incident</button>
+        </form>
+    }
+    @if (Parcel is null || Parcel.Stage == TransportStage.Returning)
+    {
+        <form class="form-stack top-space" method="post" action="@($"{ActionPath}/undeliverable")">
+            <AntiforgeryToken />
+            @SellerOrderField
+            <label>Undeliverable reason <input name="reason" maxlength="250" required /></label>
+            @foreach (var item in Items)
+            {
+                <input type="hidden" name="itemId" value="@item.Id" />
+                <label>Restock @item.Name (@(item.SellerSkuCode.Length > 0 ? item.SellerSkuCode : item.SkuCode))
+                    <input type="number" name="quantity" min="0" max="@item.Quantity" value="@item.Quantity" required />
+                </label>
+            }
+            <button class="button secondary" type="submit">Receive returned package</button>
+        </form>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public string ActionPath { get; set; } = "";
+    [Parameter] public Guid? SellerOrderId { get; set; }
+    [Parameter, EditorRequired] public OrderStatus Status { get; set; }
+    [Parameter, EditorRequired] public IReadOnlyList<EOfficeOrderItemDto> Items { get; set; } = [];
+    [Parameter, EditorRequired] public PaymentMethod Method { get; set; }
+    [Parameter, EditorRequired] public decimal TotalVnd { get; set; }
+    [Parameter] public TransportParcelSummary? Parcel { get; set; }
+
+    private RenderFragment SellerOrderField => @<text>
+        @if (SellerOrderId is Guid id)
+        {
+            <input type="hidden" name="sellerOrderId" value="@id" />
+        }
+    </text>;
+}

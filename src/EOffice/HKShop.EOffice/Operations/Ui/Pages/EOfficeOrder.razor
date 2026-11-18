@@ -1,0 +1,188 @@
+@page "/eoffice/orders/{Id:guid}"
+@layout EOfficeLayout
+@attribute [Authorize(Policy = ShopPolicies.EOfficeStaff)]
+@inject ICommerceOperationsPort Commerce
+@inject IShopRequestContext Request
+
+<PageTitle>Order Details · HKShop EOffice</PageTitle>
+<a class="back" href="/eoffice/orders">← Orders</a>
+@if (details is null)
+{
+    <section class="empty-state"><h1>Order not found</h1></section>
+}
+else
+{
+    var order = details;
+    <div class="heading-row">
+        <div><h1>Order @ShopDisplay.ShortOrder(order.Number)</h1><p class="muted">Placed @ShopDisplay.Date(order.CreatedAt)</p></div>
+        <span class="status">@order.Status</span>
+    </div>
+    <div class="split">
+        <section class="panel">
+            @if (order.SellerOrders.Count > 0)
+            {
+                <h2>Seller Breakdown</h2>
+                @foreach (var sellerOrder in order.SellerOrders)
+                {
+                    var sellerName = details.SellerNames.TryGetValue(sellerOrder.SellerId, out var name) ? name : $"Seller #{sellerOrder.SellerId}";
+                    var sellerItems = order.Items.Where(i => i.SellerOrderId == sellerOrder.Id).ToList();
+                    <article class="editor top-space" id="@($"seller-order-{sellerOrder.Id}")">
+                        <div class="heading-row">
+                            <div>
+                                <h3>@sellerName</h3>
+                                <small>@sellerOrder.Number</small>
+                            </div>
+                            <span class="status">@sellerOrder.Status</span>
+                        </div>
+                        <ul class="clean-list">
+                            @foreach (var item in sellerItems)
+                            {
+                                <li>
+                                    <strong>@item.Quantity × @item.Name</strong>
+                                    <small>@(item.SellerSkuCode.Length > 0 ? item.SellerSkuCode : item.SkuCode)</small>
+                                    <span>@ShopDisplay.Money(item.UnitPriceVnd * item.Quantity - item.DiscountVnd)</span>
+                                </li>
+                            }
+                        </ul>
+                        <dl>
+                            <div><dt>Subtotal</dt><dd>@ShopDisplay.Money(sellerOrder.SubtotalVnd)</dd></div>
+                            @if (sellerOrder.SellerDiscountVnd + sellerOrder.PlatformDiscountVnd > 0)
+                            {
+                                <div><dt>Discount</dt><dd>-@ShopDisplay.Money(sellerOrder.SellerDiscountVnd + sellerOrder.PlatformDiscountVnd)</dd></div>
+                            }
+                            <div><dt>Shipping</dt><dd>@ShopDisplay.Money(sellerOrder.ShippingVnd)</dd></div>
+                            @if (sellerOrder.CommissionVnd > 0)
+                            {
+                                <div><dt>Platform commission</dt><dd>@ShopDisplay.Money(sellerOrder.CommissionVnd)</dd></div>
+                            }
+                            <div class="total"><dt>Seller total</dt><dd>@ShopDisplay.Money(sellerOrder.TotalVnd)</dd></div>
+                        </dl>
+                        @if (sellerOrder.Shipment is { } shipment)
+                        {
+                            <p>Carrier: @shipment.Carrier<br />Tracking: @shipment.TrackingNumber</p>
+                        }
+                        @if (sellerOrder.Transport is { } parcel)
+                        {
+                            <h4>HKShop delivery</h4>
+                            <p class="status">@(sellerOrder.Status is OrderStatus.AwaitingPayment or OrderStatus.Expired or OrderStatus.PaymentFailed
+                                ? ShopDisplay.Status(sellerOrder.Status) : ShopDisplay.Status(parcel.Stage))</p>
+                            <ol class="timeline">
+                                @if (parcel.PackedAt is { } packed) { <li>Packed <small>@ShopDisplay.Date(packed)</small></li> }
+                                @if (parcel.RequestedAt is { } requested) { <li>Pickup requested <small>@ShopDisplay.Date(requested)</small></li> }
+                                @if (parcel.AcknowledgedAt is { } acknowledged) { <li>Pickup accepted <small>@ShopDisplay.Date(acknowledged)</small></li> }
+                                @if (parcel.PickedUpAt is { } pickedUp) { <li>Picked up <small>@ShopDisplay.Date(pickedUp)</small></li> }
+                                @if (sellerOrder.DeliveredAt is { } delivered) { <li>Delivered <small>@ShopDisplay.Date(delivered)</small></li> }
+                            </ol>
+                            @if (parcel.Stage == TransportStage.Delivered && parcel.DoorPayment == DoorPayment.Cash)
+                            {
+                                <p>Paid @ShopDisplay.Money(parcel.CashCollectedVnd) in cash to the HKShop shipper.</p>
+                            }
+                        }
+                        <EOfficeOrderActions ActionPath="@($"/api/eoffice/orders/{order.Id:D}")" SellerOrderId="sellerOrder.Id"
+                            Status="sellerOrder.Status" Items="sellerItems" Method="order.Payment.Method" TotalVnd="sellerOrder.TotalVnd" Parcel="sellerOrder.Transport" />
+                        <EOfficeTransportActions Order="sellerOrder" />
+                    </article>
+                }
+            }
+            else
+            {
+                <h2>Items</h2>
+                <ul class="clean-list">
+                    @foreach (var item in order.Items)
+                    {
+                        <li>
+                            <strong>@item.Quantity × @item.Name</strong> <small>@item.SkuCode</small>
+                            <span>@ShopDisplay.Money(item.UnitPriceVnd * item.Quantity - item.DiscountVnd)</span>
+                        </li>
+                    }
+                </ul>
+            }
+
+            @if (order.PaymentAttempts.Count > 0)
+            {
+                <h2 class="top-space">Payment Attempts</h2>
+                <ul class="clean-list">
+                    @foreach (var attempt in order.PaymentAttempts)
+                    {
+                        <li>
+                            <strong>#@attempt.AttemptNumber · @attempt.Method · @attempt.Status</strong>
+                            <small>
+                                @if (!string.IsNullOrEmpty(attempt.ProviderInvoice)) { @($"Invoice {attempt.ProviderInvoice} · ") }
+                                Expected @ShopDisplay.Money(attempt.AmountVnd)
+                                @if (attempt.CapturedAmountVnd > 0) { @($" · Captured {ShopDisplay.Money(attempt.CapturedAmountVnd)}") }
+                                @if (!string.IsNullOrEmpty(attempt.ProviderTransaction)) { @($" · Transaction {attempt.ProviderTransaction}") }
+                                @if (attempt.AppliedToOrder) { @(" · Applied") }
+                                @if (!string.IsNullOrEmpty(attempt.Issue)) { @($" · {attempt.Issue}") }
+                            </small>
+                        </li>
+                    }
+                </ul>
+            }
+
+            <h2 class="top-space">Order Timeline</h2>
+            <ol class="timeline">
+                @foreach (var entry in order.Events)
+                {
+                    <li><strong>@entry.Status</strong><small>@ShopDisplay.Date(entry.OccurredAt)</small>
+                        @if (entry.Note.Length > 0) { <p>@entry.Note</p> }
+                    </li>
+                }
+            </ol>
+        </section>
+        <aside class="panel summary">
+            <h2>Delivery & Payment</h2>
+            <p>@order.Recipient · @order.Phone<br />@order.ShippingAddress</p>
+            @if (order.SellerOrders.Count == 0 && order.Shipment is not null)
+            {
+                <p>Carrier: @order.Shipment.Carrier<br />Tracking: @order.Shipment.TrackingNumber</p>
+            }
+            <p>@ShopDisplay.Method(order.Payment.Method) · @ShopDisplay.Status(order.PaymentStatus)</p>
+            @if (!string.IsNullOrEmpty(order.Payment.Issue))
+            {
+                <p class="field-error">@order.Payment.Issue</p>
+            }
+            <dl>
+                @if (order.SellerOrders.Any(child => child.Transport is not null))
+                {
+                    <div><dt>Merchandise after discounts</dt><dd>@ShopDisplay.Money(order.TotalVnd - order.ShippingVnd)</dd></div>
+                }
+                <div><dt>Total shipping</dt><dd>@ShopDisplay.Money(order.ShippingVnd)</dd></div>
+                <div class="total"><dt>Order total</dt><dd>@ShopDisplay.Money(order.TotalVnd)</dd></div>
+                @if (order.PaymentStatus == PaymentStatus.Paid || order.PaymentAttempts.Any(attempt => attempt.Status == PaymentStatus.Paid))
+                {
+                    var paidAttempts = order.PaymentAttempts.Where(attempt => attempt.Status == PaymentStatus.Paid).ToList();
+                    var captured = paidAttempts.Count > 0 ? paidAttempts.Sum(attempt => attempt.CapturedAmountVnd) : order.Payment.AmountVnd;
+                    var refunded = details.Refunds.Where(refund => refund.Status == RefundStatus.Completed).Sum(refund => refund.AmountVnd);
+                    var pending = details.Refunds.Where(refund => refund.Status == RefundStatus.Pending).Sum(refund => refund.AmountVnd);
+                    <div><dt>Captured</dt><dd>@ShopDisplay.Money(captured)</dd></div>
+                    <div><dt>Refunded</dt><dd>@ShopDisplay.Money(refunded)</dd></div>
+                    @if (pending > 0)
+                    {
+                        <div><dt>Pending refunds</dt><dd>@ShopDisplay.Money(pending)</dd></div>
+                    }
+                }
+            </dl>
+            @if (order.Status == OrderStatus.AwaitingPayment)
+            {
+                <form class="form-stack top-space" action="@($"/api/eoffice/orders/{order.Id:D}/cancel")" method="post">
+                    <AntiforgeryToken />
+                    <label>Cancellation reason <input name="reason" maxlength="250" /></label>
+                    <button class="button secondary" type="submit">Cancel pending payment order</button>
+                </form>
+            }
+        </aside>
+    </div>
+    <EOfficeOrderReturns Details="details" />
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    private EOfficeOrderDetailsDto? details;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var actor = await Request.Actor();
+        details = await Commerce.OrderDetailsAsync(actor, Id);
+        if (details is null) Request.Context.Response.StatusCode = 404;
+    }
+}

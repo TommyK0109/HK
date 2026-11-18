@@ -1,0 +1,40 @@
+@page "/seller/invitations/accept"
+@attribute [Authorize(Policy = ShopPolicies.CommerceAccount)]
+@inject IShopRequestContext Request
+
+<PageTitle>Store invitation · HKShop</PageTitle>
+<h1>Store invitation</h1>
+
+@if (Token?.Length != 64 || Token.Any(c => !char.IsAsciiHexDigit(c)))
+{
+    <p class="message message-error" role="alert">The invitation link is invalid.</p>
+}
+else if (!actor.Verified)
+{
+    <p class="message message-error" role="alert">Confirm your email and sign in again to accept the invitation.</p>
+    <a href="/account/resend">Resend confirmation email</a>
+}
+else if (!actor.Mfa)
+{
+    <SellerMfaPrompt ReturnUrl="@InvitationPath" />
+}
+else
+{
+    <section class="panel narrow">
+        <p>You are signed in as <strong>@actor.Email</strong>. Use the email address that received the invitation.</p>
+        <form method="post" action="/api/commerce/seller/invitations/accept">
+            <AntiforgeryToken />
+            <input type="hidden" name="token" value="@Token" />
+            <button class="button" type="submit">Accept invitation</button>
+        </form>
+        <p class="top-space"><a href="@QueryHelpers.AddQueryString("/account/login", "returnUrl", InvitationPath)">Sign in with another email</a></p>
+    </section>
+}
+
+@code {
+    [SupplyParameterFromQuery] public string? Token { get; set; }
+    private ShopActor actor = new("", "", false, false, false);
+    private string InvitationPath => QueryHelpers.AddQueryString("/seller/invitations/accept", "token", Token ?? "");
+
+    protected override async Task OnInitializedAsync() => actor = await Request.Actor();
+}

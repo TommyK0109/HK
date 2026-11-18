@@ -1,0 +1,76 @@
+@namespace HKShop.Commerce.Ui.Shared
+
+@if (Details.Returns.Count > 0 || Details.Refunds.Count > 0 || EligibleSellerOrders.Any())
+{
+    <section class="panel top-space">
+        <h2>Returns and refunds</h2>
+        @foreach (var sellerOrder in EligibleSellerOrders)
+        {
+            var lines = Details.Order.Items.Where(line => line.SellerOrderId == sellerOrder.Id)
+                .Select(line => (Item: line, Available: AvailableToReturn(line)))
+                .Where(line => line.Available > 0).ToList();
+            if (lines.Count == 0) continue;
+            var sellerName = Details.SellerNames.GetValueOrDefault(sellerOrder.SellerId, sellerOrder.Number);
+            <details class="editor">
+                <summary>Request a return · @sellerName</summary>
+                <form class="form-stack" method="post" action="/api/commerce/orders/return">
+                    <AntiforgeryToken />
+                    <input type="hidden" name="id" value="@Details.Order.Id" />
+                    <input type="hidden" name="sellerOrderId" value="@sellerOrder.Id" />
+                    @foreach (var (item, available) in lines)
+                    {
+                        <input type="hidden" name="itemId" value="@item.Id" />
+                        <label>@item.Name · @item.SkuCode
+                            <input type="number" name="quantity" min="0" max="@available" value="0" required />
+                        </label>
+                    }
+                    <label>Reason for return <textarea name="reason" maxlength="250" required></textarea></label>
+                    <button class="button" type="submit">Submit request</button>
+                </form>
+            </details>
+        }
+        @foreach (var row in Details.Returns)
+        {
+            <article class="editor" id="@($"return-{row.Id}")">
+                @if (Details.Order.SellerOrders.FirstOrDefault(child => child.Id == row.SellerOrderId) is { } sellerOrder)
+                {
+                    <p>@Details.SellerNames.GetValueOrDefault(sellerOrder.SellerId, sellerOrder.Number)</p>
+                }
+                <SellerOrderReturn Row="row" Items="Details.Order.Items" ActionPath="null" />
+            </article>
+        }
+        @foreach (var refund in Details.Refunds)
+        {
+            <p class="refund-row">
+                @if (Details.Order.SellerOrders.FirstOrDefault(child => child.Id == refund.SellerOrderId) is { } child)
+                {
+                    @($"{Details.SellerNames.GetValueOrDefault(child.SellerId, child.Number)} · ")
+                }
+                @ShopDisplay.Money(refund.AmountVnd) · @RefundStatusText(refund)
+                @if (refund.ShippingVnd > 0)
+                {
+                    <small>Includes shipping fee @ShopDisplay.Money(refund.ShippingVnd)</small>
+                }
+            </p>
+        }
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public OrderDetails Details { get; set; } = default!;
+    [Parameter] public DateTimeOffset Now { get; set; }
+
+    private IEnumerable<SellerOrder> EligibleSellerOrders => Details.Order.SellerOrders.Where(child =>
+        child.Status == OrderStatus.Delivered && child.DeliveredAt?.AddDays(14) >= Now);
+
+    private int AvailableToReturn(OrderItem line) => line.Quantity - Details.Returns
+        .Where(row => row.Status != ReturnStatus.Rejected && row.SellerOrderId == line.SellerOrderId)
+        .Sum(row => row.Items.Where(item => item.OrderItemId == line.Id)
+            .Sum(item => row.Status is ReturnStatus.Requested or ReturnStatus.Approved ? item.Requested : item.Accepted));
+
+    private static string RefundStatusText(Refund refund)
+    {
+        if (refund.Status != RefundStatus.Completed) return "Awaiting refund";
+        return refund.Simulated ? "Simulated refund recorded" : "Refunded";
+    }
+}

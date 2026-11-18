@@ -1,0 +1,42 @@
+@inject IShopRequestContext Request
+
+<nav class="section-nav" aria-label="Store management">
+    @if (IsStaff || IsAdmin)
+    {
+        <a href="/eoffice/products" aria-current="@Current("/eoffice/products")">Catalog</a>
+        <a href="/eoffice/inventory" aria-current="@Current("/eoffice/inventory")">Inventory</a>
+        <a href="/eoffice/orders" aria-current="@Current("/eoffice/orders")">Orders</a>
+        <a href="/eoffice/transport" aria-current="@Current("/eoffice/transport")">Transportation</a>
+        <a href="/eoffice/returns" aria-current="@Current("/eoffice/returns")">Returns</a>
+    }
+    @if (IsAdmin)
+    {
+        <a href="/eoffice/promotions" aria-current="@Current("/eoffice/promotions")">Promotions</a>
+        <a href="/eoffice/payments" aria-current="@Current("/eoffice/payments")">Payment</a>
+        <a href="/eoffice/payouts" aria-current="@Current("/eoffice/payouts")">Payouts</a>
+        <a href="/eoffice/reports" aria-current="@Current("/eoffice/reports")">Reports</a>
+        <a href="/eoffice/sellers" aria-current="@Current("/eoffice/sellers")">Stores</a>
+        <a href="/eoffice/marketplace" aria-current="@Current("/eoffice/marketplace")">Marketplace moderation</a>
+        <a href="/eoffice/users" aria-current="@Current("/eoffice/users")">Users</a>
+    }
+    @if (IsShipper || IsAdmin)
+    {
+        <a href="/eoffice/shipper" aria-current="@Current("/eoffice/shipper")">Shipper workspace</a>
+    }
+</nav>
+
+@code {
+    [Parameter] public bool IsStaff { get; set; }
+    [Parameter] public bool IsAdmin { get; set; }
+    [Parameter] public bool IsShipper { get; set; }
+
+    private string? Current(string href)
+    {
+        var path = Request.Context.Request.Path.Value?.TrimEnd('/');
+        if (href == "/eoffice/products" && string.Equals(path, "/eoffice", StringComparison.OrdinalIgnoreCase))
+            return "page";
+        if (string.Equals(path, href, StringComparison.OrdinalIgnoreCase))
+            return "page";
+        return path?.StartsWith(href + "/", StringComparison.OrdinalIgnoreCase) == true ? "location" : null;
+    }
+}

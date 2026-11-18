@@ -1,0 +1,94 @@
+@page "/seller/{SellerId:long}/orders/{Id:guid}"
+@attribute [Authorize(Policy = ShopPolicies.CommerceSellerMfa)]
+@using HKShop.Application.Sellers
+@inject OrderService Orders
+@inject ReturnService Returns
+@inject IShopRequestContext Request
+
+<PageTitle>Orders · HKShop</PageTitle>
+<a class="back" href="@($"/seller/{SellerId}/orders")">← Orders and returns</a>
+@if (details is null)
+{
+    <section class="empty-state"><h1>Order not found</h1></section>
+}
+else
+{
+    var order = details.SellerOrder;
+    <div class="heading-row">
+        <div><h1>@order.Number</h1><p class="muted">@ShopDisplay.Date(order.CreatedAt)</p></div>
+        <span class="status">@ShopDisplay.Status(order.Status)</span>
+    </div>
+    <div class="panel-grid">
+        <section class="panel">
+            <h2>Products</h2>
+            <ul class="clean-list">
+                @foreach (var item in details.Items)
+                {
+                    <li>
+                        <strong>@item.Quantity × @item.Name</strong>
+                        <small>@item.SellerSkuCode</small>
+                        <span>@ShopDisplay.Money(item.UnitPriceVnd * item.Quantity - item.DiscountVnd)</span>
+                    </li>
+                }
+            </ul>
+        </section>
+        @if (details.ShippingAddress.Length > 0 || order.Shipment is not null)
+        {
+            <section class="panel">
+                <h2>Shipping</h2>
+                @if (details.ShippingAddress.Length > 0)
+                {
+                    <p>@details.Recipient · @details.Phone<br />@details.ShippingAddress</p>
+                }
+                @if (order.Shipment is { } shipment)
+                {
+                    <p>@shipment.Carrier · @shipment.TrackingNumber<br />Dispatched @ShopDisplay.Date(shipment.DispatchedAt)</p>
+                }
+            </section>
+        }
+    </div>
+    <SellerFulfillmentActions ActionPath="@($"/api/commerce/seller/{SellerId}/orders/{Id:D}")"
+        Status="order.Status" Items="details.Items" Method="details.PaymentMethod" TotalVnd="order.TotalVnd" Parcel="order.Transport" />
+    <TransportSellerActions Order="order" />
+    @if (requests.Count > 0)
+    {
+        <section class="panel top-space">
+            <h2>Returns</h2>
+            @foreach (var row in requests)
+            {
+                <article class="editor" id="@($"return-{row.Id}")">
+                    <SellerOrderReturn Row="row" Items="details.Items" ActionPath="@($"/api/commerce/seller/{SellerId}/returns/{row.Id}")" />
+                </article>
+            }
+        </section>
+    }
+}
+
+@code {
+    [Parameter] public long SellerId { get; set; }
+    [Parameter] public Guid Id { get; set; }
+    private SellerOrderDetails? details;
+    private List<ReturnRequest> requests = [];
+
+    protected override async Task OnParametersSetAsync()
+    {
+        details = null;
+        requests = [];
+        var actor = await Request.Actor();
+        try
+        {
+            var order = await Orders.SellerDetails(actor, SellerId, Id);
+            if (order is null)
+            {
+                Request.Context.Response.StatusCode = 404;
+                return;
+            }
+            requests = await Returns.SellerReturns(actor, SellerId, Id);
+            details = order;
+        }
+        catch (SellerAccessDeniedException)
+        {
+            Request.Context.Response.StatusCode = 403;
+        }
+    }
+}

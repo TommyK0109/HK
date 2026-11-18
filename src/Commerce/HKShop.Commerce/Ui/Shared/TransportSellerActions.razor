@@ -1,0 +1,41 @@
+@namespace HKShop.Commerce.Ui.Shared
+
+@if (Order.Transport is { } parcel && Order.Status == OrderStatus.Packing)
+{
+    <section class="panel top-space">
+        <h3>HKShop pickup</h3>
+        <p>@parcel.PickupAddress</p>
+        <p class="status">@ShopDisplay.Status(parcel.Stage)</p>
+        @if (parcel.Stage == TransportStage.Packed && parcel.PickupDueAt is { } due)
+        {
+            <p>Request pickup by @ShopDisplay.Date(due).</p>
+        }
+        @if (parcel.Stage == TransportStage.Packing)
+        {
+            <form method="post" action="@Action("packed")">
+                <AntiforgeryToken />
+                <button class="button" type="submit">Mark packed</button>
+            </form>
+        }
+        else if (parcel.Stage == TransportStage.Packed)
+        {
+            <form method="post" action="@Action("pickup")">
+                <AntiforgeryToken />
+                <button class="button" type="submit">Request HKShop pickup</button>
+            </form>
+        }
+        else if (parcel.Stage == TransportStage.Acknowledged)
+        {
+            <form method="post" action="@Action("handoff")" class="form-stack">
+                <AntiforgeryToken />
+                <label>Shipper pickup code <input name="code" maxlength="8" required /></label>
+                <button class="button" type="submit">Confirm handoff to shipper</button>
+            </form>
+        }
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public SellerOrder Order { get; set; } = default!;
+    private string Action(string action) => $"/api/commerce/seller/{Order.SellerId}/transport/orders/{Order.Id:D}/{action}";
+}

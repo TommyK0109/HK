@@ -1,0 +1,96 @@
+@page "/account/{Screen}"
+@inject IShopRequestContext Request
+
+<PageTitle>@Title · HKShop</PageTitle>
+<section class="account-card panel">
+    <h1>@Title</h1>
+    @switch (Screen)
+    {
+        case "login":
+            <form class="form-stack" method="post" action="/api/commerce/account/login">
+                <AntiforgeryToken />
+                <input type="hidden" name="returnUrl" value="@ReturnUrl" />
+                <label>Email <input type="email" name="email" autocomplete="username" maxlength="256" required /></label>
+                <label>Password <input type="password" name="password" autocomplete="current-password" maxlength="128" required /></label>
+                <button class="button block" type="submit">Sign in</button>
+            </form>
+            <p class="account-links"><a href="/account/register">Create account</a><a href="/account/forgot">Forgot password?</a><a href="/account/resend">Resend confirmation</a></p>
+            break;
+        case "register":
+            <form class="form-stack" method="post" action="/api/commerce/account/register">
+                <AntiforgeryToken />
+                <label>Full name <input name="displayName" autocomplete="name" maxlength="100" required /></label>
+                <label>Email <input type="email" name="email" autocomplete="email" maxlength="256" required /></label>
+                <label>Password <input type="password" name="password" autocomplete="new-password" minlength="10" maxlength="128" aria-describedby="password-hint" required /></label>
+                <p class="muted" id="password-hint">Use at least 10 characters.</p>
+                <button class="button block" type="submit">Create account</button>
+            </form>
+            <p class="account-links"><a href="/account/login">Already have an account? Sign in</a></p>
+            break;
+        case "forgot":
+        case "resend":
+            <form class="form-stack" method="post" action="@($"/api/commerce/account/{Screen}")">
+                <AntiforgeryToken />
+                <label>Email <input name="email" type="email" autocomplete="email" maxlength="256" required /></label>
+                <button class="button block" type="submit">Send link</button>
+            </form>
+            <p class="account-links"><a href="/account/login">Back to sign in</a></p>
+            break;
+        case "mfa":
+            <form class="form-stack" method="post" action="/api/commerce/account/mfa">
+                <AntiforgeryToken />
+                <input type="hidden" name="returnUrl" value="@ReturnUrl" />
+                <label>Code from your authenticator app
+                    <input name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="12" required />
+                </label>
+                <button class="button block" type="submit">Verify</button>
+            </form>
+            break;
+        case "reset":
+            if (string.IsNullOrWhiteSpace(UserId) || string.IsNullOrWhiteSpace(Token))
+            {
+                <p>The password reset link is incomplete.</p>
+                <a href="/account/forgot">Request a new link</a>
+            }
+            else
+            {
+                <form class="form-stack" method="post" action="/api/commerce/account/reset">
+                    <AntiforgeryToken />
+                    <input type="hidden" name="userId" value="@UserId" />
+                    <input type="hidden" name="token" value="@Token" />
+                    <input type="hidden" name="confirmation" value="@Confirmation" />
+                    <label>New password <input type="password" name="password" autocomplete="new-password" minlength="10" maxlength="128" required /></label>
+                    <button class="button block" type="submit">Save password</button>
+                </form>
+            }
+            break;
+        case "denied":
+            <p>You do not have permission to access this page, or two-step verification is required.</p>
+            <a class="button" href="/account/security">Open account security</a>
+            break;
+        default:
+            <a class="button" href="/account/login">Go to sign in</a>
+            break;
+    }
+</section>
+
+@code {
+    [Parameter] public string Screen { get; set; } = "";
+    [SupplyParameterFromQuery] public string? ReturnUrl { get; set; }
+    [SupplyParameterFromQuery] public string? UserId { get; set; }
+    [SupplyParameterFromQuery] public string? Token { get; set; }
+    [SupplyParameterFromQuery] public string? Confirmation { get; set; }
+
+    private string Title => Screen switch
+    {
+        "login" => "Sign in", "register" => "Create account", "forgot" => "Forgot password",
+        "resend" => "Resend confirmation email", "reset" => "Set a new password",
+        "mfa" => "Two-step verification", "denied" => "You do not have access", _ => "Page not found"
+    };
+
+    protected override void OnParametersSet()
+    {
+        if (Screen is not ("login" or "register" or "forgot" or "resend" or "reset" or "mfa" or "denied"))
+            Request.Context.Response.StatusCode = 404;
+    }
+}

@@ -1,0 +1,82 @@
+@page "/"
+@inject CatalogService Catalog
+
+<PageTitle>HKShop · Online marketplace</PageTitle>
+<HeadContent>
+    <meta name="description" content="Explore clothing, footwear, and home goods in the HKShop marketplace." />
+</HeadContent>
+
+<section id="home-feature" class="landing-hero @(IsCategorySlide ? "landing-hero-alternate" : null)" aria-labelledby="home-heading">
+    @if (IsCategorySlide)
+    {
+        <img class="landing-hero-image" src="/landing/home-furniture.jpg" alt="" width="256" height="256" fetchpriority="high" />
+    }
+    else
+    {
+        <img class="landing-hero-image" src="/landing/figma/summer-collection.jpg" alt="" width="2000" height="1302" fetchpriority="high" />
+    }
+    <div class="landing-hero-inner">
+        <div class="landing-hero-copy">
+            @if (IsCategorySlide)
+            {
+                <p class="landing-kicker">Shop the marketplace</p>
+                <h1 id="home-heading">Find your style</h1>
+                <p class="landing-description">Explore footwear, accessories, and home goods by category.</p>
+                <a class="button landing-shop-now" href="#collections">Explore categories</a>
+            }
+            else
+            {
+                <p class="landing-kicker">Summer collection</p>
+                <h1 id="home-heading">New collection</h1>
+                <p class="landing-description">Explore new styles for you<br />and finds for your home.</p>
+                <a class="button landing-shop-now" href="/products">Shop now</a>
+            }
+        </div>
+    </div>
+    <a class="landing-arrow landing-arrow-prev" href="@OtherSlideUrl" aria-label="Previous slide">
+        <img src="/landing/figma/carousel-previous.svg" alt="" />
+    </a>
+    <a class="landing-arrow landing-arrow-next" href="@OtherSlideUrl" aria-label="Next slide">
+        <img src="/landing/figma/carousel-next.svg" alt="" />
+    </a>
+    <div class="landing-indicators" role="group" aria-label="Featured collections">
+        <a href="/" aria-current="@(IsCategorySlide ? null : "true")" aria-label="Show new collection slide"></a>
+        <a href="/?slide=2" aria-current="@(IsCategorySlide ? "true" : null)" aria-label="Show categories slide"></a>
+    </div>
+</section>
+
+<section id="collections" class="shell home-collections" aria-labelledby="collections-heading">
+    <h2 id="collections-heading">Explore by category</h2>
+    <div class="home-collection-grid">
+        <a class="home-collection-card" href="@CategoryUrl("Shoes", "shoes")">
+            <span class="collection-image"><img src="/landing/footwear.jpg" alt="" width="256" height="149" loading="lazy" /></span>
+            <span class="collection-link"><span>Footwear</span><span aria-hidden="true">↗</span></span>
+        </a>
+        <a class="home-collection-card" href="@CategoryUrl("Accessory", "accessories")">
+            <span class="collection-image"><img src="/landing/accessories.jpg" alt="" width="197" height="256" loading="lazy" /></span>
+            <span class="collection-link"><span>Accessories</span><span aria-hidden="true">↗</span></span>
+        </a>
+        <a class="home-collection-card" href="@CategoryUrl("Home Furniture And Decor", "home")">
+            <span class="collection-image"><img src="/landing/lamp.jpg" alt="" width="256" height="256" loading="lazy" /></span>
+            <span class="collection-link"><span>Home &amp; living</span><span aria-hidden="true">↗</span></span>
+        </a>
+    </div>
+</section>
+
+@code {
+    [SupplyParameterFromQuery(Name = "slide")] public string? Slide { get; set; }
+
+    private List<Category> categories = [];
+    private bool IsCategorySlide => Slide == "2";
+    private string OtherSlideUrl => IsCategorySlide ? "/" : "/?slide=2";
+
+    protected override async Task OnInitializedAsync() => categories = await Catalog.Categories();
+
+    private string CategoryUrl(string name, string keyword)
+    {
+        var category = categories.FirstOrDefault(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        return category is null
+            ? QueryHelpers.AddQueryString("/products", "q", keyword)
+            : QueryHelpers.AddQueryString("/products", "category", category.Id.ToString());
+    }
+}

@@ -1,0 +1,119 @@
+@page "/eoffice/reports"
+@layout EOfficeLayout
+@attribute [Authorize(Policy = ShopPolicies.EOfficeAdmin)]
+@inject ICommerceOperationsPort Commerce
+@inject ICatalogOperationsPort Catalog
+@inject IShopRequestContext Request
+
+<PageTitle>Reports · HKShop EOffice</PageTitle>
+<h1>Reports</h1>
+<form class="filter-bar compact" method="get" action="/eoffice/reports">
+    <label>From <input type="date" name="from" value="@DateInput(start)" required /></label>
+    <label>To <input type="date" name="to" value="@DateInput(end)" required /></label>
+    <label>Audit action <input name="action" value="@ActionFilter" maxlength="100" /></label>
+    <button class="button" type="submit">Apply</button>
+</form>
+@if (error is not null) { <p class="message message-error" role="alert">@error</p> }
+@if (sales is not null)
+{
+    <div class="metric-grid">
+        <div class="panel"><h2>Collected</h2><strong>@ShopDisplay.Money(sales.Collected)</strong></div>
+        <div class="panel"><h2>Refunded</h2><strong>@ShopDisplay.Money(sales.Refunded)</strong></div>
+        <div class="panel"><h2>Net collected</h2><strong>@ShopDisplay.Money(sales.Net)</strong></div>
+    </div>
+    <div class="panel-grid top-space">
+        <section class="panel">
+            <h2>Orders by status</h2>
+            @if (sales.Orders.Count == 0) { <p>No orders in this date range.</p> }
+            <ul class="clean-list">
+                @foreach (var group in sales.Orders)
+                {
+                    <li>@ShopDisplay.Status(group.Status)<strong>@group.Count</strong></li>
+                }
+            </ul>
+            <a class="button secondary" href="@($"/api/eoffice/reports/sales.csv?from={DateInput(start)}&to={DateInput(end)}")">Download sales CSV</a>
+        </section>
+        <section class="panel">
+            <h2>Low stock</h2>
+            @if (stock is not null)
+            {
+                <p>@stock.Total SKUs at the alert threshold</p>
+                <ul class="clean-list">
+                    @foreach (var row in stock.Items.Take(5))
+                    {
+                        <li>@row.Code · @row.Product <strong>@row.Available</strong></li>
+                    }
+                </ul>
+            }
+            <a class="button secondary" href="/api/eoffice/reports/stock.csv">Download low-stock CSV</a>
+        </section>
+    </div>
+}
+@if (audit is not null)
+{
+    <section class="panel top-space">
+        <h2>Audit log</h2>
+        @if (audit.Total == 0) { <p>No actions in this date range.</p> }
+        else
+        {
+            <div class="table-wrap"><table>
+                <thead><tr><th scope="col">Date</th><th scope="col">User</th><th scope="col">Store</th><th scope="col">Action</th><th scope="col">Target</th><th scope="col">Reason</th></tr></thead>
+                <tbody>
+                    @foreach (var entry in audit.Items)
+                    {
+                        <tr><td>@ShopDisplay.Date(entry.OccurredAt)</td><td>@entry.ActorId</td><td>@(entry.SellerId?.ToString() ?? "—")</td><td>@ShopDisplay.AuditAction(entry.Action)</td><td>@entry.Target</td><td>@entry.Reason</td></tr>
+                    }
+                </tbody>
+            </table></div>
+            <Pager Current="audit.Number" Last="audit.Last" Url="PageUrl" />
+        }
+    </section>
+}
+<section class="panel top-space">
+    <h2>Undelivered email</h2>
+    @if (mail.Count == 0) { <p>No emails have exhausted their retry attempts.</p> }
+    <ul class="clean-list">
+        @foreach (var message in mail)
+        {
+            <li>#@message.Id · @message.Subject <span>@message.Attempts attempts</span></li>
+        }
+    </ul>
+</section>
+
+@code {
+    [SupplyParameterFromQuery(Name = "from")] public string? From { get; set; }
+    [SupplyParameterFromQuery(Name = "to")] public string? To { get; set; }
+    [SupplyParameterFromQuery(Name = "action")] public string? ActionFilter { get; set; }
+    [SupplyParameterFromQuery(Name = "page")] public int? Number { get; set; }
+    private DateOnly start;
+    private DateOnly end;
+    private SalesSummary? sales;
+    private Page<AuditEntryDto>? audit;
+    private Page<StockRow>? stock;
+    private IReadOnlyList<FailedMailDto> mail = [];
+    private string? error;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var today = DateOnly.FromDateTime(ShopSettings.VietnamTime(DateTimeOffset.UtcNow).DateTime);
+        start = DateOnly.TryParseExact(From, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedStart)
+            ? parsedStart : today.AddDays(-29);
+        end = DateOnly.TryParseExact(To, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedEnd)
+            ? parsedEnd : today;
+        var actor = await Request.Actor();
+        try
+        {
+            sales = await Commerce.SalesReportAsync(actor, start, end);
+            audit = await Commerce.AuditReportAsync(actor, start, end, ActionFilter?.Trim(), Number ?? 1);
+            stock = await Catalog.ListFirstPartyStockAsync(actor, low: true);
+        }
+        catch (ShopRuleException problem) { error = problem.Message; }
+        mail = await Commerce.FailedMailAsync(actor);
+    }
+
+    private string PageUrl(int page) => QueryHelpers.AddQueryString("/eoffice/reports", new Dictionary<string, string?>
+    {
+        ["from"] = DateInput(start), ["to"] = DateInput(end), ["action"] = ActionFilter, ["page"] = page.ToString()
+    });
+    private static string DateInput(DateOnly value) => value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+}

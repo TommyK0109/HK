@@ -1,0 +1,136 @@
+@page "/eoffice/transport"
+@layout EOfficeLayout
+@attribute [Authorize(Policy = ShopPolicies.EOfficeStaff)]
+@inject IShopRequestContext Request
+@inject IShippingAdminPort ShippingAdmin
+@inject IShippingGateway ShippingGateway
+@inject TimeProvider Clock
+
+<PageTitle>HKShop transportation · EOffice</PageTitle>
+<h1>Transportation</h1>
+@if (actor.Admin)
+{
+    <div class="panel-grid">
+        <section class="panel">
+            <h2>Shipper access</h2>
+            <form method="post" action="/api/eoffice/transport/shippers" class="form-stack">
+                <AntiforgeryToken />
+                <label>Registered email <input type="email" name="email" required /></label>
+                <button type="submit" name="active" value="true" class="button">Enable shipper</button>
+                <button type="submit" name="active" value="false" class="button secondary">Disable shipper</button>
+            </form>
+        </section>
+        <section class="panel">
+            <h2>Storage pickup locations</h2>
+            @if (firstPartyLocation is not null)
+            {
+                <form class="form-stack" method="post" action="/api/eoffice/transport/location">
+                    <AntiforgeryToken />
+                    <input type="hidden" name="sellerId" value="1" />
+                    <label>Storage address <input name="address" value="@firstPartyLocation.PickupAddress" maxlength="300" required /></label>
+                    <TransportPin Latitude="firstPartyLocation.Latitude" Longitude="firstPartyLocation.Longitude" Required="true" Label="Storage location" />
+                    <button type="submit" class="button">Save pickup location</button>
+                </form>
+            }
+            <p class="muted top-space">Third-party stores configure their own active storage location in Seller Center before launch.</p>
+        </section>
+    </div>
+}
+<section class="panel top-space">
+    <h2>Pickup and delivery operations</h2>
+    @if (jobs.Count == 0) { <p>No jobs need attention.</p> }
+    @foreach (var job in jobs)
+    {
+        var parcel = job.Parcel;
+        <article class="editor">
+            <div class="heading-row">
+                <a href="@($"/eoffice/orders/{job.OrderId:D}#seller-order-{parcel.SellerOrderId}")">@job.Number</a>
+                <span class="status">@ShopDisplay.Status(parcel.Stage)</span>
+            </div>
+            <p>@parcel.PickupAddress</p>
+            @if (parcel.RequestedAt is { } requested)
+            {
+                <p>Requested @ShopDisplay.Date(requested)</p>
+            }
+            @if (parcel.AcknowledgedAt is { } acknowledged && parcel.Stage == TransportStage.Acknowledged &&
+                 acknowledged.AddHours(1) <= Clock.GetUtcNow())
+            {
+                <p class="message message-error">Pickup is overdue.</p>
+            }
+            @if (parcel.Issue.Length > 0)
+            {
+                <p>@parcel.Issue</p>
+            }
+            @if (parcel.Stage is TransportStage.Assigned or TransportStage.Acknowledged)
+            {
+                <form method="post" action="@Action(parcel, "reassign")">
+                    <AntiforgeryToken />
+                    <button type="submit" class="button secondary">Reassign pickup</button>
+                </form>
+            }
+            @if (parcel.Stage == TransportStage.PickedUp && parcel.FailedDeliveryCodes >= 5)
+            {
+                <form method="post" action="@Action(parcel, "reset-confirmation")">
+                    <AntiforgeryToken />
+                    <button type="submit" class="button secondary">Reset delivery code attempts</button>
+                </form>
+            }
+            @if (actor.Admin && parcel.DoorPayment == DoorPayment.Cash && parcel.FundsVerifiedAt is null)
+            {
+                <p>Awaiting remittance of @ShopDisplay.Money(job.TotalVnd - job.ShippingVnd) with reference
+                    <strong>@TransportService.RemittanceReference(parcel.SellerOrderId)</strong>.</p>
+            }
+            @if (actor.Admin && parcel.Stage == TransportStage.Delivered && parcel.ShipperFeeVnd > 0 && parcel.ShipperPaidAt is null)
+            {
+                <form method="post" action="@Action(parcel, "payout")" class="form-stack">
+                    <AntiforgeryToken />
+                    <p>Shipper @job.ShipperEmail · Fee payable @ShopDisplay.Money(parcel.ShipperFeeVnd)</p>
+                    <label>Confirmed bank payout reference <input name="reference" maxlength="100" required /></label>
+                    <button type="submit" class="button">Record shipper payout</button>
+                </form>
+            }
+        </article>
+    }
+</section>
+@if (actor.Admin)
+{
+    <section class="panel top-space">
+        <h2>Bank transfers to review</h2>
+        @if (bankReceipts.Count == 0) { <p>No unmatched transfers.</p> }
+        <ul class="clean-list">
+            @foreach (var receipt in bankReceipts)
+            {
+                <li><strong>Transaction @receipt.TransactionId</strong><span>@ShopDisplay.Money(receipt.AmountVnd)</span>
+                    <small>@receipt.Reference · @receipt.Issue</small>
+                    <form method="post" action="@($"/api/eoffice/transport/bank/{receipt.TransactionId}/resolve")" class="form-stack">
+                        <AntiforgeryToken />
+                        <label>Correct parcel transfer reference <input name="reference" maxlength="35" /></label>
+                        <label>Or confirmed external resolution <input name="resolution" maxlength="250" /></label>
+                        <button class="button secondary" type="submit">Resolve bank exception</button>
+                    </form>
+                </li>
+            }
+        </ul>
+    </section>
+}
+
+@code {
+    private ShopActor actor = new("", "", false, false, false);
+    private IReadOnlyList<TransportOperationRow> jobs = [];
+    private IReadOnlyList<TransportBankExceptionRow> bankReceipts = [];
+    private SellerLocationSummary? firstPartyLocation;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        actor = await Request.Actor();
+        jobs = await ShippingAdmin.OperationsAsync(actor);
+        if (actor.Admin)
+        {
+            bankReceipts = await ShippingAdmin.BankExceptionsAsync(actor);
+            firstPartyLocation = await ShippingGateway.GetSellerLocationAsync(actor, 1);
+        }
+    }
+
+    private static string Action(TransportParcelSummary parcel, string action) =>
+        $"/api/eoffice/transport/jobs/{parcel.SellerOrderId:D}/{action}";
+}

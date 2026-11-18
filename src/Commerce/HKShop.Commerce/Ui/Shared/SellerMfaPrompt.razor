@@ -1,0 +1,23 @@
+@namespace HKShop.Commerce.Ui.Shared
+@inject ShopRequest Request
+
+<section class="panel narrow">
+    <h2>Two-factor authentication</h2>
+    @if (enrolled)
+    {
+        <p>Sign in again and enter the code from your authenticator app to continue.</p>
+        <a class="button" href="@QueryHelpers.AddQueryString("/account/login", "returnUrl", ReturnUrl)">Sign in again</a>
+    }
+    else
+    {
+        <p>Enable two-factor authentication on your account to continue.</p>
+        <a class="button" href="@QueryHelpers.AddQueryString("/account/security", "returnUrl", ReturnUrl)">Open account security</a>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public string ReturnUrl { get; set; } = "";
+    private bool enrolled;
+
+    protected override async Task OnInitializedAsync() => enrolled = (await Request.Identity())?.TwoFactorEnabled == true;
+}

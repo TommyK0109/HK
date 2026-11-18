@@ -1,0 +1,47 @@
+@namespace HKShop.Commerce.Ui.Shared
+
+<h3>@ShopDisplay.Status(Row.Status) <small>@ShopDisplay.Date(Row.RequestedAt)</small></h3>
+<p>@Row.Reason</p>
+@if (Row.StaffNote.Length > 0) { <p>@Row.StaffNote</p> }
+<ul class="clean-list">
+    @foreach (var item in Row.Items)
+    {
+        <li>@ItemLabel(item) · Requested @item.Requested · Accepted @item.Accepted · Restocked @item.Restocked</li>
+    }
+</ul>
+@if (ActionPath is not null && Row.Status == ReturnStatus.Requested)
+{
+    <form class="form-stack top-space" method="post" action="@($"{ActionPath}/review")">
+        <AntiforgeryToken />
+        <label>Note <input name="note" maxlength="250" /></label>
+        <div class="row-actions">
+            <button class="button" name="approved" value="true" type="submit">Approve</button>
+            <button class="button secondary" name="approved" value="false" type="submit">Reject</button>
+        </div>
+    </form>
+}
+@if (ActionPath is not null && Row.Status == ReturnStatus.Approved)
+{
+    <form class="form-stack top-space" method="post" action="@($"{ActionPath}/inspect")">
+        <AntiforgeryToken />
+        @foreach (var item in Row.Items)
+        {
+            <div class="form-columns">
+                <input type="hidden" name="itemId" value="@item.Id" />
+                <label>@ItemLabel(item) · Accepted <input type="number" name="accepted" min="0" max="@item.Requested" value="@item.Requested" required /></label>
+                <label>Restocked <input type="number" name="restocked" min="0" max="@item.Requested" value="0" required /></label>
+            </div>
+        }
+        <label>Inspection result <input name="note" maxlength="250" required /></label>
+        <button class="button" type="submit">Record inspection</button>
+    </form>
+}
+
+@code {
+    [Parameter, EditorRequired] public ReturnRequest Row { get; set; } = default!;
+    [Parameter, EditorRequired] public IReadOnlyList<OrderItem> Items { get; set; } = [];
+    [Parameter] public string? ActionPath { get; set; }
+
+    private string ItemLabel(ReturnItem item) =>
+        Items.FirstOrDefault(line => line.Id == item.OrderItemId)?.SkuCode ?? item.OrderItemId.ToString();
+}

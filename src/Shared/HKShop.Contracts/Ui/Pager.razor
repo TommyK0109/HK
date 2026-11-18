@@ -1,0 +1,16 @@
+@namespace HKShop.Web.Components.Shared
+
+@if (Last > 1)
+{
+    <nav class="pager" aria-label="Pagination">
+        @if (Current > 1) { <a class="button secondary" href="@Url(Current - 1)">Previous page</a> }
+        <span aria-current="page">Page @Current / @Last</span>
+        @if (Current < Last) { <a class="button secondary" href="@Url(Current + 1)">Next page</a> }
+    </nav>
+}
+
+@code {
+    [Parameter] public int Current { get; set; }
+    [Parameter] public int Last { get; set; }
+    [Parameter, EditorRequired] public Func<int, string> Url { get; set; } = default!;
+}

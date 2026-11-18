@@ -1,0 +1,82 @@
+@page "/products"
+@inject CatalogService Catalog
+<PageTitle>Products · HKShop</PageTitle>
+<section id="catalog">
+    <h1>Products</h1>
+    <form class="filter-bar product-filters" method="get" action="/products" role="search" aria-label="Search and filter products">
+        <label class="product-search">Search <input id="product-search" name="q" type="search" value="@Search" placeholder="Product name or SKU" maxlength="100" /></label>
+        <label>Category
+            <select name="category">
+                <option value="">All</option>
+                @foreach (var category in categories)
+                {
+                    <option value="@category.Id" selected="@(category.Id == CategoryId)">@category.Name</option>
+                }
+            </select>
+        </label>
+        <label>Sort by
+            <select name="sort">
+                <option value="" selected="@(string.IsNullOrEmpty(Sort))">Newest</option>
+                <option value="price-asc" selected="@(Sort == "price-asc")">Price: low to high</option>
+                <option value="price-desc" selected="@(Sort == "price-desc")">Price: high to low</option>
+            </select>
+        </label>
+        <label>Listings
+            <select name="listings">
+                <option value="" selected="@(BrowseMode == CatalogBrowseMode.All)">All products</option>
+                <option value="offers" selected="@(BrowseMode == CatalogBrowseMode.WithOffers)">With seller offers</option>
+                <option value="imports" selected="@(BrowseMode == CatalogBrowseMode.Imports)">Imported catalog</option>
+            </select>
+        </label>
+        <div class="filter-actions">
+            <button class="button" type="submit">Search</button>
+            @if (!string.IsNullOrEmpty(Search) || CategoryId.HasValue || !string.IsNullOrEmpty(Sort) || !string.IsNullOrEmpty(Listings))
+            {
+                <a href="/products">Clear</a>
+            }
+        </div>
+    </form>
+    @if (products is not null)
+    {
+        @if (products.Total == 0)
+        {
+            <div class="empty-state"><p>No matching products found.</p><a class="button" href="/products">View the full catalog</a></div>
+        }
+        else
+        {
+            <p class="muted">@products.Total products</p>
+            <div class="product-grid">
+                @foreach (var product in products.Items) { <ProductTile Product="product" /> }
+            </div>
+            <Pager Current="products.Number" Last="products.Last" Url="PageUrl" />
+        }
+    }
+</section>
+
+@code {
+    [SupplyParameterFromQuery(Name = "q")] public string? Search { get; set; }
+    [SupplyParameterFromQuery(Name = "category")] public long? CategoryId { get; set; }
+    [SupplyParameterFromQuery(Name = "sort")] public string? Sort { get; set; }
+    [SupplyParameterFromQuery(Name = "page")] public int? PageNumber { get; set; }
+    [SupplyParameterFromQuery(Name = "listings")] public string? Listings { get; set; }
+    private Page<CatalogCard>? products;
+    private List<Category> categories = [];
+    private CatalogBrowseMode BrowseMode => Listings switch
+    {
+        "offers" => CatalogBrowseMode.WithOffers,
+        "imports" => CatalogBrowseMode.Imports,
+        _ => CatalogBrowseMode.All
+    };
+
+    protected override async Task OnParametersSetAsync()
+    {
+        products = await Catalog.Browse(Search, CategoryId, Sort, PageNumber ?? 1, BrowseMode);
+        categories = await Catalog.Categories();
+    }
+
+    private string PageUrl(int page) => QueryHelpers.AddQueryString("/products", new Dictionary<string, string?>
+    {
+        ["q"] = Search, ["category"] = CategoryId?.ToString(), ["sort"] = Sort,
+        ["listings"] = Listings, ["page"] = page.ToString()
+    });
+}

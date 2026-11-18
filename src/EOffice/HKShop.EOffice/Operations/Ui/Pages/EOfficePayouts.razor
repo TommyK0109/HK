@@ -1,0 +1,80 @@
+@page "/eoffice/payouts"
+@layout EOfficeLayout
+@attribute [Authorize(Policy = ShopPolicies.EOfficeAdmin)]
+@inject ICommerceOperationsPort Commerce
+@inject IShopRequestContext Request
+
+<PageTitle>Seller payouts · HKShop EOffice</PageTitle>
+<h1>Seller payouts</h1>
+<p class="muted">Payouts on this page are simulated.</p>
+@if (queue is not null)
+{
+    <section class="panel">
+        <h2>Requests and reconciliation</h2>
+        @if (queue.Total == 0)
+        {
+            <p>No payout requests yet.</p>
+        }
+        @foreach (var row in queue.Items)
+        {
+            var payout = row;
+            var actionPath = $"/api/eoffice/payouts/{payout.Id:D}";
+            <article class="editor">
+                <div class="heading-row">
+                    <h3>@row.SellerName · @ShopDisplay.Money(payout.AmountVnd)</h3>
+                    <span class="status">@ShopDisplay.Status(payout.Status)</span>
+                </div>
+                <p class="muted">Requested at @ShopDisplay.Date(payout.RequestedAt)</p>
+                <p>Request ID <code>@payout.Id.ToString("D")</code></p>
+                @if (!string.IsNullOrEmpty(payout.ProviderReference))
+                {
+                    <p>Simulated reference <code>@payout.ProviderReference</code></p>
+                }
+                @if (!string.IsNullOrEmpty(payout.ReviewNote))
+                {
+                    <p>@payout.ReviewNote</p>
+                }
+                @if (!string.IsNullOrEmpty(payout.Issue))
+                {
+                    <p class="field-error">@payout.Issue</p>
+                }
+                @if (payout.Status == PayoutStatus.Requested)
+                {
+                    <form class="form-stack narrow" method="post" action="@($"{actionPath}/review")">
+                        <AntiforgeryToken />
+                        <label>Note (required when rejecting)<input name="note" maxlength="250" /></label>
+                        <div class="row-actions">
+                            <button class="button" name="approve" value="true" type="submit">Approve</button>
+                            <button class="button secondary" name="approve" value="false" type="submit">Reject</button>
+                        </div>
+                    </form>
+                }
+                else if (payout.Status == PayoutStatus.Processing)
+                {
+                    @if (payout.NextAttemptAt is { } nextAttemptAt)
+                    {
+                        <p>Next reconciliation attempt @ShopDisplay.Date(nextAttemptAt)</p>
+                    }
+                    <form method="post" action="@($"{actionPath}/reconcile")">
+                        <AntiforgeryToken />
+                        <button class="button secondary" type="submit">Reconcile status</button>
+                    </form>
+                }
+                else if (payout.CompletedAt is { } completedAt)
+                {
+                    <p>Completed at @ShopDisplay.Date(completedAt)</p>
+                }
+            </article>
+        }
+        <Pager Current="queue.Number" Last="queue.Last" Url="PageUrl" />
+    </section>
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "page")] public int? Number { get; set; }
+    private Page<PayoutQueueItemDto>? queue;
+
+    protected override async Task OnParametersSetAsync() => queue = await Commerce.PayoutQueueAsync(await Request.Actor(), Number ?? 1);
+
+    private static string PageUrl(int page) => $"/eoffice/payouts?page={page}";
+}

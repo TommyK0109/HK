@@ -1,0 +1,163 @@
+@page "/products/{Slug}"
+@inject CatalogService Catalog
+@inject IProductImageStore Media
+@inject IShopRequestContext Request
+
+@if (details is null)
+{
+    <PageTitle>Product not found · HKShop</PageTitle>
+    <section class="empty-state narrow"><h1>Product not found</h1><a class="button" href="/products">Back to catalog</a></section>
+}
+else
+{
+    <PageTitle>@details.Product.Name · HKShop</PageTitle>
+    <a class="back" href="/products">← All products</a>
+    <article class="product-detail">
+        <div class="detail-gallery">
+            @foreach (var image in details.Images)
+            {
+                <img src="@Media.Url(image.FileName)" alt="@image.Alt" width="800" height="800" loading="@(image == details.Images[0] ? "eager" : "lazy")" />
+            }
+        </div>
+        <div class="detail-copy">
+            <h1>@details.Product.Name</h1>
+            @if (details.BrowseOnly)
+            {
+                <p class="detail-price">@(details.CatalogPriceVnd is decimal price ? ShopDisplay.Money(price) : "Price unavailable")</p>
+            }
+            else
+            {
+                <h2 class="minor-title">Choose a variant</h2>
+                @if (details.Offers.Count == 0)
+                {
+                    <p class="muted">There are no sellers for this product yet.</p>
+                }
+            }
+            @foreach (var offers in details.Offers.GroupBy(offer => offer.SkuId))
+            {
+                var preferred = offers.First();
+                <section>
+                    <h3>@VariantLabel(preferred) <small>@preferred.SkuCode</small></h3>
+                    @OfferForm(preferred)
+                    @if (offers.Skip(1).Any())
+                    {
+                        <details class="editor">
+                            <summary>View other sellers</summary>
+                            @foreach (var offer in offers.Skip(1))
+                            {
+                                @OfferForm(offer)
+                            }
+                        </details>
+                    }
+                </section>
+            }
+        </div>
+    </article>
+    @if (reviews is { } reviewPage)
+    {
+        <section id="reviews" class="section-space" aria-labelledby="reviews-title">
+            <h2 id="reviews-title">Product reviews (@reviewPage.Total)</h2>
+            <div class="panel-grid">
+                <div class="panel">
+                    @if (reviewPage.Total == 0)
+                    {
+                        <p class="muted">There are no reviews yet.</p>
+                    }
+                    @foreach (var review in reviewPage.Items)
+                    {
+                        <article class="review-entry" id="@($"review-{review.Id}")">
+                            <strong>@review.Rating/5 stars</strong>
+                            <time class="muted" datetime="@review.CreatedAt.ToString("O")">@ShopSettings.VietnamTime(review.CreatedAt).ToString("dd/MM/yyyy")</time>
+                            @if (review.UpdatedAt is { } edited)
+                            {
+                                <small> · Edited @ShopSettings.VietnamTime(edited).ToString("dd/MM/yyyy")</small>
+                            }
+                            <p>@review.Content</p>
+                            @if (review.CanEdit)
+                            {
+                                <details class="editor">
+                                    <summary>Edit review</summary>
+                                    <form class="form-stack" method="post" action="@($"{ReviewAction}/{review.Id}")">
+                                        <AntiforgeryToken />
+                                        <input type="hidden" name="reviewPage" value="@reviewPage.Number" />
+                                        <ProductReviewFields Rating="@review.Rating" Content="@review.Content" />
+                                        <button class="button" type="submit">Save changes</button>
+                                    </form>
+                                </details>
+                            }
+                        </article>
+                    }
+                    <Pager Current="reviewPage.Number" Last="reviewPage.Last" Url="ReviewPageUrl" />
+                </div>
+                <div class="panel">
+                    <h3>Write a review</h3>
+                    @if (canReview)
+                    {
+                        <form class="form-stack" method="post" action="@ReviewAction">
+                            <AntiforgeryToken />
+                            <ProductReviewFields />
+                            <button class="button" type="submit">Submit review</button>
+                        </form>
+                    }
+                    else
+                    {
+                        <a href="@QueryHelpers.AddQueryString("/account/login", "returnUrl", $"{ProductUrl}#reviews")">Sign in to write a review</a>
+                    }
+                </div>
+            </div>
+        </section>
+    }
+}
+
+@code {
+    [Parameter] public string Slug { get; set; } = "";
+    [SupplyParameterFromQuery(Name = "reviewPage")] public int? ReviewPage { get; set; }
+    private CatalogDetails? details;
+    private Page<ProductReviewDisplay>? reviews;
+    private bool canReview;
+    private string ProductSlug => Uri.EscapeDataString(details?.Product.Slug ?? Slug);
+    private string ProductUrl => $"/products/{ProductSlug}";
+    private string ReviewAction => $"/api/commerce/reviews/{ProductSlug}";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        reviews = null;
+        details = await Catalog.Details(Slug, includeImports: true);
+        if (details is null)
+        {
+            Request.Context.Response.StatusCode = 404;
+            return;
+        }
+        if (details.BrowseOnly) return;
+
+        var actor = Request.UserId is null ? null : await Request.Actor();
+        canReview = actor is { Verified: true };
+        reviews = await Catalog.Reviews(details.Product.Id, canReview ? actor?.UserId : null, ReviewPage ?? 1);
+    }
+
+    private string ReviewPageUrl(int page) => $"{QueryHelpers.AddQueryString(ProductUrl, "reviewPage", page.ToString())}#reviews";
+
+    private static string VariantLabel(CatalogOfferDisplay variant) =>
+        string.Join(" / ", new[] { variant.Size, variant.Color }.Where(value => value.Length > 0)) is { Length: > 0 } label
+            ? label : "Standard";
+
+    private RenderFragment OfferForm(CatalogOfferDisplay offer) => @<form class="variant-row" method="post" action="/api/commerce/cart">
+        <div>
+            <strong>@offer.SellerName</strong>
+            @if (offer.SellerSkuCode != offer.SkuCode)
+            {
+                <small>@offer.SellerSkuCode</small>
+            }
+            <small>@(offer.Available > 0 ? $"{offer.Available} available" : "Out of stock")</small>
+            <b>@ShopDisplay.Money(offer.Price)</b>
+        </div>
+        <AntiforgeryToken />
+        <input type="hidden" name="offerId" value="@offer.Id" />
+        <input type="hidden" name="add" value="true" />
+        @if (offer.Available > 0)
+        {
+            <label>Quantity<input type="number" name="quantity" min="1" max="@Math.Min(999, offer.Available)" value="1" required /></label>
+            <button class="button" type="submit">Add to cart</button>
+        }
+    </form>;
+}

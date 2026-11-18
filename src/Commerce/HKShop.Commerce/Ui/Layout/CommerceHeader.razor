@@ -1,0 +1,86 @@
+@namespace HKShop.Commerce.Ui.Layout
+@inject CartService Cart
+@inject ShopRequest Request
+
+<header class="landing-header">
+    <div class="landing-utility">
+        <div class="landing-utility-links">
+            <a href="/products?listings=offers">Seller offers</a>
+            <a href="/products?listings=imports">Imported catalog</a>
+        </div>
+        <p>Clothing, footwear, and home goods</p>
+        @if (!Actor.IsEmployee)
+        {
+            <a href="/seller" aria-current="@CurrentPage("/seller")">@(SignedIn ? "Seller center" : "Sell on HKShop")</a>
+        }
+        else
+        {
+            <a href="/eoffice">EOffice portal</a>
+        }
+    </div>
+    <nav class="landing-nav" aria-label="Main navigation">
+        <a class="landing-brand" href="/" aria-label="HKShop, home">HKShop</a>
+        <div class="landing-links">
+            <a href="/" aria-current="@CurrentPage("/")">Home</a>
+            <details class="landing-shop" data-active="@(Request.Context.Request.Path.StartsWithSegments("/products") ? "true" : null)">
+                <summary>Shop <img src="/landing/figma/shop-chevron.svg" alt="" /></summary>
+                <div class="landing-shop-menu">
+                    <a href="/products">All products</a>
+                    <a href="/products?listings=offers">Seller offers</a>
+                    <a href="/products?listings=imports">Imported catalog</a>
+                </div>
+            </details>
+            <a href="/#collections">Categories</a>
+            @if (SignedIn && !Actor.IsEmployee)
+            {
+                <a href="/orders" aria-current="@CurrentPage("/orders")">Orders</a>
+            }
+        </div>
+        <div class="landing-actions">
+            @if (Actor.IsEmployee)
+            {
+                <a class="landing-account" href="/eoffice" aria-label="Open EOffice">
+                    <img src="/landing/figma/account.svg" alt="" /><span>EOffice</span>
+                </a>
+            }
+            else
+            {
+                <a class="landing-account" href="@AccountUrl" aria-current="@CurrentPage(AccountUrl)" aria-label="@AccountLabel">
+                    <img src="/landing/figma/account.svg" alt="" /><span>@AccountLabel</span>
+                </a>
+            }
+            <a href="/products#product-search" aria-label="Search products"><img src="/landing/figma/search.svg" alt="" /></a>
+            @if (!Actor.IsEmployee)
+            {
+                <a href="/cart" aria-label="Shopping cart" aria-current="@CurrentPage("/cart")" aria-description="@(ShowCartQuantity ? $"{cartQuantity} in cart" : null)">
+                    <img src="/landing/figma/cart.svg" alt="" />
+                    @if (ShowCartQuantity)
+                    {
+                        <span>@cartQuantity</span>
+                    }
+                </a>
+            }
+        </div>
+    </nav>
+</header>
+
+@code {
+    [Parameter, EditorRequired] public ShopActor Actor { get; set; } = default!;
+    [Parameter] public bool ShowCartQuantity { get; set; }
+
+    private int cartQuantity;
+    private bool SignedIn => Actor.UserId.Length > 0;
+    private string AccountLabel => SignedIn ? "Account" : "Login / Register";
+    private string AccountUrl => SignedIn ? "/account/profile" : "/account/login";
+
+    private string? CurrentPage(string path) => Request.Context.Request.Path == path ? "page" : null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!ShowCartQuantity || Actor.IsEmployee) return;
+
+        var guestHash = SignedIn ? null : Request.GuestHash();
+        if (SignedIn || guestHash is not null)
+            cartQuantity = (await Cart.Get(SignedIn ? Actor.UserId : null, guestHash)).Lines.Sum(line => line.Quantity);
+    }
+}

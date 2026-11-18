@@ -1,0 +1,66 @@
+@page "/eoffice/marketplace"
+@layout EOfficeLayout
+@attribute [Authorize(Policy = ShopPolicies.EOfficeAdmin)]
+@inject ICommerceOperationsPort Commerce
+@inject IShopRequestContext Request
+
+<PageTitle>Marketplace review · HKShop EOffice</PageTitle>
+<h1>Marketplace review</h1>
+
+@if (moderation is not null)
+{
+    <section class="panel">
+        <h2>Offers pending review</h2>
+        @if (moderation.Offers.Total == 0)
+        {
+            <p>No offers pending review.</p>
+        }
+        @foreach (var offer in moderation.Offers.Items)
+        {
+            <details class="editor">
+                <summary>@offer.Product · @offer.Seller</summary>
+                <p>Variant @offer.Variant · Offer code @offer.Code · @ShopDisplay.Money(offer.PriceVnd ?? 0)</p>
+                <form class="heading-row" method="post" action="@($"/api/eoffice/marketplace/offers/{offer.Id}")">
+                    <AntiforgeryToken />
+                    <button class="button" type="submit" name="decision" value="approve">Approve offer</button>
+                    <button class="button secondary" type="submit" name="decision" value="reject">Reject</button>
+                </form>
+            </details>
+        }
+        <Pager Current="moderation.Offers.Number" Last="moderation.Offers.Last" Url="OfferUrl" />
+    </section>
+
+    <section id="proposals" class="panel top-space">
+        <h2>Product proposals pending review</h2>
+        @if (moderation.Proposals.Total == 0)
+        {
+            <p>No proposals pending review.</p>
+        }
+        @foreach (var proposal in moderation.Proposals.Items)
+        {
+            <details class="editor">
+                <summary>@proposal.Name · @proposal.Seller</summary>
+                <p class="muted">@proposal.Category · @proposal.Slug</p>
+                <p>@proposal.Description</p>
+                <form class="heading-row" method="post" action="@($"/api/eoffice/marketplace/proposals/{proposal.Id}")">
+                    <AntiforgeryToken />
+                    <button class="button" type="submit" name="decision" value="approve">Approve and open draft</button>
+                    <button class="button secondary" type="submit" name="decision" value="reject">Reject</button>
+                </form>
+            </details>
+        }
+        <Pager Current="moderation.Proposals.Number" Last="moderation.Proposals.Last" Url="ProposalUrl" />
+    </section>
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "offers")] public int? OfferPage { get; set; }
+    [SupplyParameterFromQuery(Name = "proposals")] public int? ProposalPage { get; set; }
+    private MarketplaceModeration? moderation;
+
+    protected override async Task OnParametersSetAsync() =>
+        moderation = await Commerce.ModerationAsync(await Request.Actor(), OfferPage ?? 1, ProposalPage ?? 1);
+
+    private string OfferUrl(int page) => $"/eoffice/marketplace?offers={page}&proposals={moderation?.Proposals.Number ?? 1}";
+    private string ProposalUrl(int page) => $"/eoffice/marketplace?offers={moderation?.Offers.Number ?? 1}&proposals={page}#proposals";
+}

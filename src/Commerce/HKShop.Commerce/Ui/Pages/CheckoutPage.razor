@@ -1,0 +1,147 @@
+@page "/checkout"
+@attribute [Authorize(Policy = ShopPolicies.CommerceAccount)]
+@inject AddressService Addresses
+@inject CartService Cart
+@inject CheckoutService Checkout
+@inject PaymentService Payments
+@inject CheckoutTokens Tokens
+@inject IShopRequestContext Request
+
+<PageTitle>Checkout · HKShop</PageTitle>
+<a class="back" href="/cart">← Back to Cart</a>
+<h1>Checkout</h1>
+<div class="split">
+    <section class="panel">
+        <h2>Delivery & Payment</h2>
+        @if (!Checkout.UsesTransport && !supportsCod)
+        {
+            <p class="message">@CheckoutService.CodRestrictedMessage</p>
+        }
+        @if (!Checkout.UsesTransport && !supportsCod && !Payments.OnlineAvailable)
+        {
+            <p class="message message-error">SePay Sandbox is required for this order but is not currently configured.</p>
+        }
+        else if (addresses.Count == 0)
+        {
+            <p>Add a shipping address to continue.</p>
+            <a class="button" href="/account/addresses">Add Address</a>
+        }
+        else
+        {
+            <form class="form-stack" method="get" action="/checkout">
+                <label>Shipping address
+                    <select name="address" required>
+                        @foreach (var address in addresses)
+                        {
+                            <option value="@address.Id" selected="@(address.Id == AddressId)">@address.Recipient · @address.AddressText</option>
+                        }
+                    </select>
+                </label>
+                <label>Payment method
+                    <select name="method" required>
+                        @if (Checkout.UsesTransport)
+                        {
+                            <option value="" selected="@(Method is null)" disabled>Choose how to pay</option>
+                            <option value="TransportAtDelivery" selected="@(Method == "TransportAtDelivery")">Pay the HKShop shipper at delivery</option>
+                        }
+                        else if (supportsCod)
+                        {
+                            <option value="Cod" selected="@(selectedMethod != "SePay")">Cash on Delivery (Simulated)</option>
+                        }
+                        @if (Payments.OnlineAvailable)
+                        {
+                            <option value="SePay" selected="@(selectedMethod == "SePay")">@(Checkout.UsesTransport ? "Pay online with SePay" : "SePay Sandbox")</option>
+                        }
+                    </select>
+                </label>
+                <label>Coupon code <input name="coupon" maxlength="40" value="@Coupon" /></label>
+                <button class="button secondary" type="submit">Review Order Quote</button>
+            </form>
+        }
+        @if (error is not null) { <p class="message message-error" role="alert">@error</p> }
+    </section>
+    @if (preview is not null)
+    {
+        <aside class="panel summary">
+            <h2>Order Quote Summary</h2>
+            <p>@preview.Address.Recipient · @preview.Address.Phone<br />@preview.Address.AddressText</p>
+            @foreach (var seller in preview.Sellers)
+            {
+                <div class="top-space">
+                    <h3>@seller.SellerName</h3>
+                    <ul class="clean-list">
+                        @foreach (var line in seller.Lines)
+                        {
+                            <li>
+                                @line.Quantity × @line.Name <small>@line.Code</small>
+                                <span>@ShopDisplay.Money(line.LineSubtotal - line.PlatformDiscountVnd - line.SellerDiscountVnd)</span>
+                            </li>
+                        }
+                    </ul>
+                    <dl>
+                        <div><dt>Seller subtotal</dt><dd>@ShopDisplay.Money(seller.SubtotalVnd)</dd></div>
+                        @if (seller.DiscountVnd > 0)
+                        {
+                            <div><dt>Discount allocated</dt><dd>-@ShopDisplay.Money(seller.DiscountVnd)</dd></div>
+                        }
+                        <div><dt>Seller shipping</dt><dd>@ShopDisplay.Money(seller.ShippingVnd)</dd></div>
+                        @if (preview.Quote.TransportRoutes?.FirstOrDefault(r => r.SellerId == seller.SellerId) is { } route)
+                        {
+                            <div><dt>Road distance</dt><dd>@((route.DistanceMeters / 1000m).ToString("0.###")) km</dd></div>
+                        }
+                        <div><dt>Seller total</dt><dd>@ShopDisplay.Money(seller.TotalVnd)</dd></div>
+                    </dl>
+                </div>
+            }
+            <dl class="top-space">
+                <div><dt>Merchandise subtotal</dt><dd>@ShopDisplay.Money(preview.Subtotal)</dd></div>
+                <div><dt>Total discount</dt><dd>-@ShopDisplay.Money(preview.Discount)</dd></div>
+                <div><dt>Total shipping</dt><dd>@ShopDisplay.Money(preview.Shipping)</dd></div>
+                @if (preview.Quote.Method == PaymentMethod.TransportAtDelivery)
+                {
+                    <div><dt>Due at checkout</dt><dd>@ShopDisplay.Money(0)</dd></div>
+                    <div class="total"><dt>Due at delivery</dt><dd>@ShopDisplay.Money(preview.Total)</dd></div>
+                }
+                else
+                {
+                    <div class="total"><dt>@(Checkout.UsesTransport ? "Due at checkout" : "Order total")</dt><dd>@ShopDisplay.Money(preview.Total)</dd></div>
+                }
+            </dl>
+            <form method="post" action="/api/commerce/checkout/place">
+                <AntiforgeryToken />
+                <input type="hidden" name="quoteToken" value="@Tokens.Protect(preview.Quote)" />
+                <button class="button block" type="submit">Place Order</button>
+            </form>
+        </aside>
+    }
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "address")] public long? AddressId { get; set; }
+    [SupplyParameterFromQuery(Name = "method")] public string? Method { get; set; }
+    [SupplyParameterFromQuery(Name = "coupon")] public string? Coupon { get; set; }
+    private List<CustomerAddress> addresses = [];
+    private CheckoutPreview? preview;
+    private string? error;
+    private bool supportsCod = true;
+    private string selectedMethod => Method ?? (Checkout.UsesTransport ? "" : supportsCod ? "Cod" : "SePay");
+
+    protected override async Task OnParametersSetAsync()
+    {
+        preview = null;
+        error = null;
+        var actor = await Request.Actor();
+        var cart = await Cart.Get(actor.UserId, null);
+        supportsCod = cart.SupportsCod;
+        addresses = await Addresses.List(actor.UserId);
+        if (AddressId is null) return;
+        try
+        {
+            if (!Enum.TryParse<PaymentMethod>(selectedMethod, out var method) ||
+                (method == PaymentMethod.SePay && !Payments.OnlineAvailable))
+                throw new ShopRuleException("Invalid payment method.");
+            preview = await Checkout.Quote(actor, AddressId.Value, method, Coupon ?? "");
+        }
+        catch (ShopRuleException problem) { error = problem.Message; }
+    }
+}

@@ -1,0 +1,56 @@
+<section class="panel top-space">
+    <h2>Returns</h2>
+    @if (Details.Returns.Count > 0)
+    {
+        @foreach (var request in Details.Returns)
+        {
+            var sellerName = request.SellerOrderId is Guid sellerOrderId &&
+                Details.SellerOrders.FirstOrDefault(s => s.Id == sellerOrderId) is { } sellerOrder &&
+                Details.SellerNames.TryGetValue(sellerOrder.SellerId, out var name) ? name : null;
+            var requestItems = request.Items.Count > 0
+                ? Details.Items.Where(item => request.Items.Any(line => line.OrderItemId == item.Id)).ToList()
+                : Details.Items;
+            <article class="editor" id="@($"return-{request.Id}")">
+                <p>
+                    <strong>@request.Status</strong>
+                    @if (sellerName is not null) { @($" · {sellerName}") }
+                    · @request.Reason
+                </p>
+                @if (request.StaffNote.Length > 0) { <p class="muted">@request.StaffNote</p> }
+                @if (request.Status == ReturnStatus.Requested)
+                {
+                    <form class="form-stack" method="post" action="@($"/api/eoffice/returns/{request.Id}/review")">
+                        <AntiforgeryToken />
+                        <label>Note <input name="note" maxlength="250" /></label>
+                        <div class="row-actions">
+                            <button class="button" type="submit" name="approved" value="true">Approve return</button>
+                            <button class="button secondary" type="submit" name="approved" value="false">Reject</button>
+                        </div>
+                    </form>
+                }
+                @if (request.Status == ReturnStatus.Approved)
+                {
+                    <form class="form-stack" method="post" action="@($"/api/eoffice/returns/{request.Id}/inspect")">
+                        <AntiforgeryToken />
+                        <label>Inspection note <input name="note" maxlength="250" /></label>
+                        @foreach (var item in requestItems)
+                        {
+                            var max = request.Items.FirstOrDefault(r => r.OrderItemId == item.Id)?.Requested ?? item.Quantity;
+                            <input type="hidden" name="itemId" value="@item.Id" />
+                            <div class="form-columns">
+                                <label>Accept @item.Name <input type="number" name="accepted" min="0" max="@max" value="@max" /></label>
+                                <label>Restock @item.Name <input type="number" name="restocked" min="0" max="@max" value="@max" /></label>
+                            </div>
+                        }
+                        <button class="button" type="submit">Complete inspection</button>
+                    </form>
+                }
+            </article>
+        }
+    }
+    else { <p class="muted">No return requests for this order.</p> }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public EOfficeOrderDetailsDto Details { get; set; } = default!;
+}

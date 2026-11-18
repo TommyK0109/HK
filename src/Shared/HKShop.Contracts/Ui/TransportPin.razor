@@ -1,0 +1,21 @@
+@namespace HKShop.Web.Components.Shared
+
+<fieldset data-transport-pin>
+    <legend>@Label</legend>
+    <div class="panel-grid">
+        <label>Latitude <input name="latitude" type="number" step="any" min="-90" max="90" value="@Coordinate(Latitude)" required="@Required" /></label>
+        <label>Longitude <input name="longitude" type="number" step="any" min="-180" max="180" value="@Coordinate(Longitude)" required="@Required" /></label>
+    </div>
+    <button type="button" class="button secondary" data-use-location>Use my current location</button>
+    <p class="muted" data-location-message role="status">Use your current location if you are at the address, or enter its coordinates.</p>
+</fieldset>
+
+@code {
+    [Parameter] public double? Latitude { get; set; }
+    [Parameter] public double? Longitude { get; set; }
+    [Parameter] public string Label { get; set; } = "Location";
+    [Parameter] public bool Required { get; set; }
+
+    private static string Coordinate(double? coordinate) =>
+        coordinate?.ToString("R", CultureInfo.InvariantCulture) ?? "";
+}

@@ -1,0 +1,43 @@
+@namespace HKShop.Commerce.Ui.Layout
+@inherits LayoutComponentBase
+@inject ShopRequest Request
+@inject Microsoft.AspNetCore.Mvc.ViewFeatures.ITempDataDictionaryFactory TempDataFactory
+
+<a class="skip-link" href="#main">Skip to main content</a>
+<CommerceHeader Actor="actor" ShowCartQuantity="IsHome" />
+<main id="main" class="@(IsHome ? "landing-main" : "shell main-content")" tabindex="-1">
+    @if (actor.IsEmployee)
+    {
+        <p class="message" role="status">Employee and shipper accounts use the <a href="/eoffice">HKShop EOffice portal</a> and cannot use shopping or seller features.</p>
+    }
+    @if (error is not null)
+    {
+        <p class="message message-error" role="alert">@error</p>
+    }
+    @if (notice is not null)
+    {
+        <p class="message message-success" role="status">@notice</p>
+    }
+    @Body
+</main>
+<footer class="site-footer">
+    <div class="shell footer-inner">
+        <a href="/" class="landing-brand" aria-label="HKShop, home">HKShop</a>
+    </div>
+</footer>
+
+@code {
+    private ShopActor actor = new("", "", false, false, false);
+    private string? error;
+    private string? notice;
+    private bool IsHome => Request.Context.Request.Path == "/";
+
+    protected override async Task OnInitializedAsync()
+    {
+        actor = await Request.Actor();
+        var data = TempDataFactory.GetTempData(Request.Context);
+        error = data["Error"] as string;
+        notice = data["Notice"] as string;
+        if (error is not null || notice is not null) data.Save();
+    }
+}

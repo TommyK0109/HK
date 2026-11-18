@@ -1,0 +1,21 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="AGENTS.MD" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Shared/HKShop.Contracts/HKShop.Contracts.csproj" />
+    <Project Path="src/Commerce/HKShop.Commerce/HKShop.Commerce.csproj" />
+    <Project Path="src/EOffice/HKShop.EOffice/HKShop.EOffice.csproj" />
+    <Project Path="src/HKShop.Infrastructure/HKShop.Infrastructure.csproj" />
+    <Project Path="src/HKShop.Web/HKShop.Web.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/HKShop.AboImport/HKShop.AboImport.csproj" />
+    <Project Path="tools/HKShop.MediaSync/HKShop.MediaSync.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/HKShop.UnitTests/HKShop.UnitTests.csproj" />
+    <Project Path="tests/HKShop.IntegrationTests/HKShop.IntegrationTests.csproj" />
+    <Project Path="tests/HKShop.BrowserTests/HKShop.BrowserTests.csproj" />
+  </Folder>
+</Solution>

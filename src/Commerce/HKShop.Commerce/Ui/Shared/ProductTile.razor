@@ -1,0 +1,22 @@
+@namespace HKShop.Commerce.Ui.Shared
+@inject IProductImageStore Media
+
+<article class="product-card">
+    <a class="product-picture" href="/products/@Product.Slug" aria-label="@Product.Name">
+        @if (Product.FileName is not null)
+        {
+            <img src="@Media.Url(Product.FileName)" alt="@Product.Alt" loading="lazy" width="640" height="720" />
+        }
+    </a>
+    <div class="product-meta">
+        <h2><a href="/products/@Product.Slug">@Product.Name</a></h2>
+        <p class="product-price">
+            <strong>@(Product.Price is decimal price ? ShopDisplay.Money(price) : "Price unavailable")</strong>
+            @if (!string.IsNullOrWhiteSpace(Product.SellerName)) { <span>@Product.SellerName</span> }
+        </p>
+    </div>
+</article>
+
+@code {
+    [Parameter, EditorRequired] public CatalogCard Product { get; set; } = default!;
+}

@@ -1,0 +1,18 @@
+<form class="form-stack" method="post" action="/api/eoffice/catalog/sku">
+    <AntiforgeryToken />
+    <input type="hidden" name="productId" value="@ProductId" />
+    <input type="hidden" name="skuId" value="@(Sku?.Id ?? 0)" />
+    <div class="form-columns">
+        <label>SKU code <input name="code" value="@Sku?.Code" maxlength="64" required /></label>
+        <label>HKShop price (VND, 0 if HKShop does not sell it) <input name="price" value="@ShopDisplay.Number(Sku?.Price)" type="number" min="0" step="1" required /></label>
+        <label>Size <input name="size" value="@Sku?.Size" maxlength="40" /></label>
+        <label>Color <input name="color" value="@Sku?.Color" maxlength="40" /></label>
+    </div>
+    <label class="check"><input type="checkbox" name="active" value="true" checked="@(Sku?.Active ?? true)" /> Variant active</label>
+    <button class="button secondary" type="submit">Save SKU</button>
+</form>
+
+@code {
+    [Parameter, EditorRequired] public int ProductId { get; set; }
+    [Parameter] public SkuDisplay? Sku { get; set; }
+}

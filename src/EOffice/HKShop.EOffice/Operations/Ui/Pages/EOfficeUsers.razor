@@ -1,0 +1,82 @@
+@page "/eoffice/users"
+@layout EOfficeLayout
+@attribute [Authorize(Policy = ShopPolicies.EOfficeAdmin)]
+@inject IStaffDirectory Directory
+@inject IShopRequestContext Request
+
+<PageTitle>User management · HKShop EOffice</PageTitle>
+<h1>User</h1>
+<div class="panel-grid">
+    <section class="panel">
+        <h2>Invite staff</h2>
+        <form class="form-stack" method="post" action="/api/eoffice/users/invite">
+            <AntiforgeryToken />
+            <label>Full name <input name="displayName" maxlength="100" required /></label>
+            <label>Email <input name="email" type="email" maxlength="256" required /></label>
+            <label>Role
+                <select name="role">
+                    <option value="StoreStaff">Staff</option>
+                    <option value="Admin">Administrator</option>
+                    <option value="Shipper">Shipper</option>
+                </select>
+            </label>
+            <button class="button" type="submit">Send invitation</button>
+        </form>
+    </section>
+    <section class="panel">
+        <h2>Accounts</h2>
+        <form class="form-stack" method="get" action="/eoffice/users">
+            <label>Search email or name <input name="q" value="@Search" maxlength="100" /></label>
+            <button class="button secondary" type="submit">Search</button>
+        </form>
+        @if (rows.Count == 0) { <p class="muted top-space">No accounts found.</p> }
+        @foreach (var row in rows)
+        {
+            <details class="editor">
+                <summary>@row.Name · @row.Email</summary>
+                <p class="muted">@(row.EmailConfirmed ? "Email confirmed" : "Email not confirmed") · @(row.TwoFactorEnabled ? "MFA enabled" : "MFA not enabled")</p>
+                <form class="form-stack" method="post" action="/api/eoffice/users/access">
+                    <AntiforgeryToken />
+                    <input type="hidden" name="id" value="@row.Id" />
+                    <label>Role
+                        <select name="role">
+                            <option value="Customer" selected="@(row.Role == "Customer")">Customer</option>
+                            <option value="StoreStaff" selected="@(row.Role == "StoreStaff")">Staff</option>
+                            <option value="Admin" selected="@(row.Role == "Admin")">Administrator</option>
+                            <option value="Shipper" selected="@(row.Role == "Shipper")">Shipper</option>
+                        </select>
+                    </label>
+                    <label class="check"><input name="disabled" type="checkbox" value="true" checked="@row.Disabled" /> Disable</label>
+                    <button class="button secondary" type="submit">Save permissions</button>
+                </form>
+                @if (row.Role != "Customer" && !row.Disabled && !row.HasPassword)
+                {
+                    <form class="top-space" method="post" action="/api/eoffice/users/resend">
+                        <AntiforgeryToken /><input type="hidden" name="id" value="@row.Id" />
+                        <button class="text-button" type="submit">Resend invitation</button>
+                    </form>
+                }
+            </details>
+        }
+        <Pager Current="current" Last="last" Url="PageUrl" />
+    </section>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "q")] public string? Search { get; set; }
+    [SupplyParameterFromQuery(Name = "page")] public int? Number { get; set; }
+    private IReadOnlyList<StaffAccount> rows = [];
+    private int current = 1;
+    private int last = 1;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var page = await Directory.Browse(await Request.Actor(), Search, Number ?? 1);
+        rows = page.Items;
+        current = page.Number;
+        last = page.Last;
+    }
+
+    private string PageUrl(int page) => QueryHelpers.AddQueryString("/eoffice/users", new Dictionary<string, string?>
+        { ["page"] = page.ToString(), ["q"] = Search });
+}

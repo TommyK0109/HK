@@ -1,0 +1,130 @@
+@page "/account/profile"
+@page "/account/security"
+@page "/account/addresses"
+@attribute [Authorize(Policy = ShopPolicies.CommerceAccount)]
+@inject ICommerceAuthService Auth
+@inject AddressService Addresses
+@inject IUserProfiles Profiles
+@inject IShopRequestContext Request
+
+<PageTitle>Account · HKShop</PageTitle>
+<h1>Account</h1>
+<nav class="section-nav" aria-label="Account">
+    <a href="/account/profile" aria-current="@(path == "/account/profile" ? "page" : null)">Profile</a>
+    <a href="/account/addresses" aria-current="@(path == "/account/addresses" ? "page" : null)">Addresses</a>
+    <a href="/account/security" aria-current="@(path == "/account/security" ? "page" : null)">Security</a>
+</nav>
+
+@if (user is not null && !user.Disabled)
+{
+    @if (path == "/account/profile")
+    {
+        <section class="panel narrow">
+            <h2>Profile</h2>
+            @if (hasProfileImage)
+            {
+                <img class="profile-avatar" src="/account/profile/image" alt="Profile picture" width="80" height="80" />
+            }
+            <form class="form-stack" method="post" enctype="multipart/form-data" action="/api/commerce/account/profile">
+                <AntiforgeryToken />
+                <label>Email <input type="email" value="@user.Email" readonly /></label>
+                <label>Full name <input name="displayName" value="@user.DisplayName" autocomplete="name" maxlength="100" required /></label>
+                <label>Contact phone number (optional)
+                    <input name="contactPhone" type="tel" value="@user.ContactPhone" autocomplete="tel" maxlength="20" />
+                </label>
+                <label>Profile picture (optional)
+                    <input type="file" name="profileImage" accept="image/jpeg,image/png,image/webp" aria-describedby="profile-image-hint" />
+                </label>
+                <p id="profile-image-hint" class="muted">JPEG, PNG, or WebP, up to 2 MB.</p>
+                @if (hasProfileImage)
+                {
+                    <label class="check"><input type="checkbox" name="removeImage" value="true" /> Remove current profile picture</label>
+                }
+                <button class="button" type="submit">Save profile</button>
+            </form>
+            <form method="post" action="/api/commerce/account/logout" class="top-space">
+                <AntiforgeryToken />
+                <button class="button secondary" type="submit">Sign out</button>
+            </form>
+        </section>
+    }
+    else if (path == "/account/security")
+    {
+        <section class="panel narrow">
+            <h2>Two-step verification</h2>
+            @if (user.TwoFactorEnabled)
+            {
+                <p>Authenticator app verification is enabled.</p>
+                @if (!string.IsNullOrEmpty(ReturnUrl))
+                {
+                    <a class="button" href="@QueryHelpers.AddQueryString("/account/login", "returnUrl", ReturnUrl)">Sign in again</a>
+                }
+            }
+            else if (key is null)
+            {
+                <p>Confirm your password to generate a key for your authenticator app.</p>
+                <form class="form-stack" method="post" action="/api/commerce/account/security/prepare">
+                    <AntiforgeryToken />
+                    <input name="returnUrl" type="hidden" value="@ReturnUrl" />
+                    <label>Password <input type="password" name="password" autocomplete="current-password" maxlength="128" required /></label>
+                    <button class="button" type="submit">Set up</button>
+                </form>
+            }
+            else
+            {
+                <p>Enter this key in your authenticator app as a time-based code.</p>
+                <p class="secret-key"><code>@key</code></p>
+                <form class="form-stack" method="post" action="/api/commerce/account/security/enable">
+                    <AntiforgeryToken />
+                    <input name="returnUrl" type="hidden" value="@ReturnUrl" />
+                    <label>Verification code <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="12" required /></label>
+                    <button class="button" type="submit">Enable two-step verification</button>
+                </form>
+            }
+        </section>
+    }
+    else
+    {
+        <div class="panel-grid">
+            @foreach (var address in savedAddresses)
+            {
+                <section class="panel">
+                    <h2>@address.Recipient</h2>
+                    <AddressEditor Address="address" />
+                    <form method="post" action="/api/commerce/account/addresses/delete" class="top-space">
+                        <AntiforgeryToken />
+                        <input type="hidden" name="id" value="@address.Id" />
+                        <button class="text-button" type="submit">Delete address</button>
+                    </form>
+                </section>
+            }
+            <section class="panel">
+                <h2>Add address</h2>
+                <AddressEditor Address="newAddress" />
+            </section>
+        </div>
+        <a class="back top-space" href="/checkout">Back to checkout</a>
+    }
+}
+
+@code {
+    [SupplyParameterFromQuery] public string? ReturnUrl { get; set; }
+    private ShopUserIdentity? user;
+    private bool hasProfileImage;
+    private string? key;
+    private string path = "";
+    private List<CustomerAddress> savedAddresses = [];
+    private readonly CustomerAddress newAddress = new();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        path = (Request.Context.Request.Path.Value ?? "").TrimEnd('/').ToLowerInvariant();
+        user = await Request.Identity();
+        if (user is null || user.Disabled) return;
+        if (path == "/account/profile")
+            hasProfileImage = await Profiles.HasImage(user.Id, Request.Context.RequestAborted);
+        if (path == "/account/security" && !user.TwoFactorEnabled)
+            key = await Auth.GetAuthenticatorKeyAsync(Request.Context.User);
+        if (path == "/account/addresses") savedAddresses = await Addresses.List(user.Id);
+    }
+}

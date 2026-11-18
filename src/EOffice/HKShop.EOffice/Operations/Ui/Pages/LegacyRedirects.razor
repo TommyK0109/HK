@@ -1,0 +1,21 @@
+@page "/admin"
+@page "/admin/{*Rest}"
+@page "/shipper"
+@inject NavigationManager Navigation
+@inject IShopRequestContext Request
+
+@code {
+    [Parameter] public string? Rest { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        var path = Request.Context.Request.Path.Value ?? "";
+        var query = Request.Context.Request.QueryString.Value ?? "";
+        var target = path.StartsWith("/shipper", StringComparison.OrdinalIgnoreCase)
+            ? "/eoffice/shipper"
+            : string.IsNullOrEmpty(Rest)
+                ? "/eoffice"
+                : $"/eoffice/{Rest.TrimStart('/')}";
+        Navigation.NavigateTo(target + query, forceLoad: true);
+    }
+}

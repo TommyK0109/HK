@@ -1,0 +1,32 @@
+@page "/eoffice/promotions"
+@layout EOfficeLayout
+@attribute [Authorize(Policy = ShopPolicies.EOfficeAdmin)]
+@inject ICommerceOperationsPort Commerce
+@inject IShopRequestContext Request
+
+<PageTitle>Promotions · HKShop EOffice</PageTitle>
+<h1>Discount codes</h1>
+<div class="panel-grid">
+    <section class="panel">
+        <h2>Create discount code</h2>
+        <PromotionEditor Promotion="newPromotion" />
+    </section>
+    <section class="panel">
+        <h2>Existing codes</h2>
+        @if (rows.Count == 0) { <p>No discount codes yet.</p> }
+        @foreach (var promo in rows)
+        {
+            <details class="editor">
+                <summary>@promo.Code · @(promo.Active ? "Active" : "Inactive")</summary>
+                <PromotionEditor Promotion="promo" />
+            </details>
+        }
+    </section>
+</div>
+
+@code {
+    private IReadOnlyList<PromotionDto> rows = [];
+    private readonly PromotionDto newPromotion = new(0, "", true, false, 0m, 0m, 100,
+        DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(7));
+    protected override async Task OnInitializedAsync() => rows = await Commerce.ListPromotionsAsync(await Request.Actor());
+}

@@ -1,0 +1,156 @@
+@page "/seller/{SellerId:long}"
+@attribute [Authorize(Policy = ShopPolicies.CommerceAccount)]
+@using HKShop.Application.Sellers
+@using HKShop.Domain.Sellers
+@inject SellerService Sellers
+@inject IShopRequestContext Request
+
+<PageTitle>@(workspace?.DisplayName ?? "Seller center") · HKShop</PageTitle>
+<a class="back" href="/seller">← Switch store</a>
+
+@if (denied)
+{
+    <h1>You do not have access</h1>
+    <p>You do not have access to this store.</p>
+}
+else if (requiresMfa)
+{
+    <h1>Seller center</h1>
+    <SellerMfaPrompt ReturnUrl="@($"/seller/{SellerId}")" />
+}
+else if (workspace is not null)
+{
+    <div class="heading-row">
+        <div><h1>@workspace.DisplayName</h1><p class="muted">@workspace.Slug · @ShopDisplay.Role(workspace.Role)</p></div>
+        <span class="status">@ShopDisplay.Status(workspace.Status)</span>
+    </div>
+    @if (workspace.Status == SellerStatus.Pending)
+    {
+        <p>HKShop is reviewing the store registration.</p>
+    }
+    else if (workspace.Status == SellerStatus.Suspended)
+    {
+        <p>This store has been suspended. Contact HKShop for assistance.</p>
+    }
+    else
+    {
+        @if (CanManageCatalog || workspace.Allows(SellerPermission.Finance) || workspace.Allows(SellerPermission.Fulfillment))
+        {
+            <nav class="section-nav" aria-label="Store">
+                @if (CanManageCatalog)
+                {
+                    <a href="@($"/seller/{SellerId}/catalog")">Offers and inventory</a>
+                }
+                @if (workspace.Allows(SellerPermission.Finance))
+                {
+                    <a href="@($"/seller/{SellerId}/reports")">Store reports</a>
+                    @if (SellerId != Seller.FirstPartyId)
+                    {
+                        <a href="@($"/seller/{SellerId}/settlement")">Statements and payouts</a>
+                    }
+                }
+                @if (workspace.Allows(SellerPermission.Fulfillment))
+                {
+                    <a href="@($"/seller/{SellerId}/orders")">Orders and returns</a>
+                }
+            </nav>
+        }
+        @if (team is not null)
+        {
+            <div class="panel-grid">
+                <section class="panel">
+                    <h2>Invite member</h2>
+                    <form class="form-stack" method="post" action="@($"/api/commerce/seller/{SellerId}/invite")">
+                        <AntiforgeryToken />
+                        <label>Email <input name="email" type="email" maxlength="256" required /></label>
+                        <label>Role
+                            <select name="role">
+                                @foreach (var role in InviteRoles)
+                                {
+                                    <option value="@role">@ShopDisplay.Role(role)</option>
+                                }
+                            </select>
+                        </label>
+                        <button class="button" type="submit">Send invitation</button>
+                    </form>
+                </section>
+                <section class="panel">
+                    <h2>Members</h2>
+                    <ul class="clean-list">
+                        @foreach (var member in team.Memberships)
+                        {
+                            <li>
+                                <div>@member.Email<br /><small>@ShopDisplay.Role(member.Role)</small></div>
+                                @if (member.Status == SellerMembershipStatus.Revoked)
+                                {
+                                    <small>Access revoked</small>
+                                }
+                                else if (member.Role != SellerRole.Owner)
+                                {
+                                    <form method="post" action="@($"/api/commerce/seller/{SellerId}/members/revoke")">
+                                        <AntiforgeryToken />
+                                        <input name="userId" type="hidden" value="@member.UserId" />
+                                        <button class="text-button" type="submit" aria-label="Revoke access for @member.Email">Revoke access</button>
+                                    </form>
+                                }
+                            </li>
+                        }
+                    </ul>
+                    <h2 class="top-space">Pending invitations</h2>
+                    @if (team.Invitations.Count == 0)
+                    {
+                        <p>No pending invitations.</p>
+                    }
+                    else
+                    {
+                        <ul class="clean-list">
+                            @foreach (var invitation in team.Invitations)
+                            {
+                                <li>
+                                    <div>@invitation.Email<br /><small>@ShopDisplay.Role(invitation.Role) · Expires @ShopDisplay.Date(invitation.ExpiresAt)</small></div>
+                                    <form method="post" action="@($"/api/commerce/seller/{SellerId}/invitations/{invitation.Id}/revoke")">
+                                        <AntiforgeryToken />
+                                        <button class="text-button" type="submit" aria-label="Revoke invitation for @invitation.Email">Revoke invitation</button>
+                                    </form>
+                                </li>
+                            }
+                        </ul>
+                    }
+                </section>
+            </div>
+        }
+    }
+}
+
+@code {
+    [Parameter] public long SellerId { get; set; }
+    private static readonly SellerRole[] InviteRoles = [SellerRole.CatalogManager, SellerRole.Fulfillment, SellerRole.Finance];
+    private SellerWorkspace? workspace;
+    private SellerTeam? team;
+    private bool denied;
+    private bool requiresMfa;
+    private bool CanManageCatalog => workspace is not null && workspace.Id != Seller.FirstPartyId &&
+        workspace.Allows(SellerPermission.Catalog);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        workspace = null;
+        team = null;
+        denied = false;
+        var actor = await Request.Actor();
+        requiresMfa = actor.Verified && !actor.Mfa;
+        if (requiresMfa) return;
+
+        try
+        {
+            workspace = await Sellers.Workspace(actor, SellerId);
+            if (workspace.Allows(SellerPermission.ManageTeam)) team = await Sellers.Team(actor, SellerId);
+        }
+        catch (SellerAccessDeniedException)
+        {
+            denied = true;
+            workspace = null;
+            Request.Context.Response.StatusCode = 403;
+        }
+    }
+}

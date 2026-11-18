@@ -1,0 +1,13 @@
+@page "/status/{Code:int}"
+@page "/error"
+
+<PageTitle>HKShop · Notice</PageTitle>
+<section class="empty-state narrow">
+    <h1>@(Code == 429 ? "Too many requests" : Code == 403 ? "You do not have access" : Code == 404 ? "Page not found" : "Unable to process your request")</h1>
+    @if (Code == 429) { <p>Please wait a moment and try again.</p> }
+    <a class="button" href="/">Go to home page</a>
+</section>
+
+@code {
+    [Parameter] public int Code { get; set; } = 500;
+}

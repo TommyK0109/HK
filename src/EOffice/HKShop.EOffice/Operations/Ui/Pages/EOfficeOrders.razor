@@ -1,0 +1,61 @@
+@page "/eoffice/orders"
+@layout EOfficeLayout
+@attribute [Authorize(Policy = ShopPolicies.EOfficeStaff)]
+@inject ICommerceOperationsPort Commerce
+@inject IShopRequestContext Request
+
+<PageTitle>Orders · HKShop EOffice</PageTitle>
+<h1>Orders</h1>
+@if (page is null)
+{
+    <p>You do not have permission to view orders.</p>
+}
+else
+{
+    <form class="filter-bar compact" method="get" action="/eoffice/orders">
+        <label>Status
+            <select name="status">
+                <option value="">All</option>
+                @foreach (var status in Enum.GetValues<OrderStatus>())
+                {
+                    <option value="@status.ToString()" selected="@(Status == status.ToString())">@ShopDisplay.Status(status)</option>
+                }
+            </select>
+        </label>
+        <button class="button secondary" type="submit">Filter</button>
+    </form>
+    @if (page.Items.Count == 0) { <div class="empty-state"><p>No matching orders found.</p></div> }
+    else
+    {
+        <div class="table-wrap"><table>
+            <thead><tr><th scope="col">Order number</th><th scope="col">Order date</th><th scope="col">Status</th><th scope="col">Total</th></tr></thead>
+            <tbody>
+                @foreach (var order in page.Items)
+                {
+                    <tr>
+                        <td><a href="@($"/eoffice/orders/{order.Id:D}")">@ShopDisplay.ShortOrder(order.Number)</a></td>
+                        <td>@ShopDisplay.Date(order.CreatedAt)</td>
+                        <td><span class="status">@ShopDisplay.Status(order.Status)</span></td>
+                        <td>@ShopDisplay.Money(order.TotalVnd)</td>
+                    </tr>
+                }
+            </tbody>
+        </table></div>
+        <Pager Current="page.Number" Last="page.Last" Url="PageUrl" />
+    }
+}
+
+@code {
+    [SupplyParameterFromQuery] public string? Status { get; set; }
+    [SupplyParameterFromQuery(Name = "page")] public int? Number { get; set; }
+    private Page<EOfficeOrderSummaryDto>? page;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var actor = await Request.Actor();
+        page = await Commerce.ListOrdersAsync(actor, Enum.TryParse<OrderStatus>(Status, out var status) ? status : null, Number ?? 1);
+    }
+
+    private string PageUrl(int number) => QueryHelpers.AddQueryString("/eoffice/orders", new Dictionary<string, string?>
+        { ["page"] = number.ToString(), ["status"] = Status });
+}

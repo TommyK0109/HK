@@ -1,0 +1,60 @@
+@page "/cart"
+@inject CartService Cart
+@inject CheckoutService Checkout
+@inject IShopRequestContext Request
+
+<PageTitle>Shopping Cart · HKShop</PageTitle>
+<h1>Shopping Cart</h1>
+@if (cart.Lines.Count == 0)
+{
+    <section class="empty-state"><p>Your cart is empty.</p><a class="button" href="/products">Browse products</a></section>
+}
+else
+{
+    <div class="split">
+        <section aria-label="Cart items">
+            @foreach (var seller in cart.Lines.GroupBy(item => new { item.SellerId, item.SellerName }))
+            {
+                <h2>@seller.Key.SellerName</h2>
+                @foreach (var item in seller)
+                {
+                    <form class="line-item" method="post" action="/api/commerce/cart">
+                        <div>
+                            <a href="/products/@item.Slug"><strong>@item.Name</strong></a>
+                            <small>@item.Code · @ShopDisplay.Money(item.Price)</small>
+                            @if (!item.Active) { <p class="field-error">This offer is no longer active.</p> }
+                            else if (item.Quantity > item.Available) { <p class="field-error">Available stock: @item.Available.</p> }
+                            @if (item.Active && item.PriceChanged) { <p class="field-error">Price has changed since you added this item.</p> }
+                        </div>
+                        <AntiforgeryToken />
+                        <input type="hidden" name="offerId" value="@item.OfferId" />
+                        <label>Quantity<input type="number" name="quantity" value="@item.Quantity" min="1" max="999" /></label>
+                        <div class="row-actions">
+                            <button class="button secondary" type="submit">Update</button>
+                            <button class="text-button" type="submit" name="remove" value="true" formnovalidate>Remove</button>
+                        </div>
+                    </form>
+                }
+            }
+        </section>
+        <aside class="panel summary">
+            <h2>Summary</h2>
+            <dl><div><dt>Estimated subtotal</dt><dd>@ShopDisplay.Money(cart.Estimate)</dd></div></dl>
+            <p class="muted">Per-seller shipping and promotions are calculated at checkout.</p>
+            @if (!Checkout.UsesTransport && !cart.SupportsCod)
+            {
+                <p class="muted">Third-party and multi-seller orders require prepaid SePay payment at checkout.</p>
+            }
+            @if (cart.Lines.All(item => item.Active && item.Quantity <= item.Available))
+            {
+                <a class="button block" href="/checkout">Proceed to Checkout</a>
+            }
+        </aside>
+    </div>
+}
+
+@code {
+    private CartView cart = new(Guid.Empty, []);
+    protected override async Task OnInitializedAsync() =>
+        cart = await Cart.Get(Request.UserId, Request.UserId is null ? Request.GuestHash() : null);
+}

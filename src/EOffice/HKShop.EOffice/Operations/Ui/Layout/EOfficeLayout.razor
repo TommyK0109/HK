@@ -1,0 +1,67 @@
+@inherits LayoutComponentBase
+@inject IShopRequestContext Request
+
+<a class="skip-link" href="#content">Skip to main content</a>
+<header class="site-header">
+    <div class="shell header-bar">
+        <a class="brand" href="@HomeHref" aria-label="HKShop EOffice">
+            <img class="brand-logo" src="/landing/figma/logo-mark.svg" alt="" width="36" height="36" />
+            <span class="brand-name">HKShop EOffice</span>
+        </a>
+        <nav class="primary-nav" aria-label="EOffice account">
+            @if (signedIn)
+            {
+                <a href="/eoffice/profile" aria-current="@Current("/eoffice/profile")">Profile</a>
+                <a href="/eoffice/security" aria-current="@Current("/eoffice/security")">Security</a>
+                <form method="post" action="/api/eoffice/account/logout" class="inline-form">
+                    <AntiforgeryToken />
+                    <button class="text-button" type="submit">Sign out</button>
+                </form>
+            }
+            else
+            {
+                <a href="/eoffice/login" aria-current="@Current("/eoffice/login")">Sign in</a>
+            }
+        </nav>
+    </div>
+</header>
+
+<main id="content" class="shell main-content">
+    @if (Request.Flash("Error") is { } error)
+    {
+        <p class="message message-error" role="alert">@error</p>
+    }
+    @if (Request.Flash("Notice") is { } notice)
+    {
+        <p class="message" role="status">@notice</p>
+    }
+    @if (signedIn && (actor.Staff || actor.Admin || actor.Shipper))
+    {
+        <EOfficeNav IsStaff="actor.Staff" IsAdmin="actor.Admin" IsShipper="actor.Shipper" />
+    }
+    @Body
+</main>
+
+<footer class="site-footer">
+    <div class="shell footer-bottom">
+        <p>© 2026 HKShop EOffice. Internal Operations &amp; Shipping Management.</p>
+    </div>
+</footer>
+
+@code {
+    private bool signedIn;
+    private ShopActor actor = new("", "", false, false, false);
+    private string HomeHref => actor.Shipper && !actor.Staff && !actor.Admin ? "/eoffice/shipper" : "/eoffice";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        signedIn = Request.UserId is not null;
+        actor = signedIn ? await Request.Actor() : new("", "", false, false, false);
+    }
+
+    private string? Current(string href)
+    {
+        var path = Request.Context.Request.Path.Value?.TrimEnd('/');
+        return string.Equals(path, href, StringComparison.OrdinalIgnoreCase) ? "page" : null;
+    }
+}

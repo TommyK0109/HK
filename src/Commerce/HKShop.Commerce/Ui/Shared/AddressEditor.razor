@@ -1,0 +1,15 @@
+@namespace HKShop.Commerce.Ui.Shared
+
+<form class="form-stack" method="post" action="/api/commerce/account/addresses/save">
+    <AntiforgeryToken />
+    <input type="hidden" name="id" value="@Address.Id" />
+    <label>Recipient <input name="recipient" value="@Address.Recipient" autocomplete="shipping name" maxlength="100" required /></label>
+    <label>Phone number <input type="tel" name="phone" value="@Address.Phone" autocomplete="shipping tel" maxlength="20" required /></label>
+    <label>Address in Vietnam <textarea name="address" autocomplete="shipping street-address" maxlength="300" required>@Address.AddressText</textarea></label>
+    <TransportPin Latitude="Address.Latitude" Longitude="Address.Longitude" Label="Delivery location" />
+    <button class="button secondary" type="submit">Save address</button>
+</form>
+
+@code {
+    [Parameter, EditorRequired] public CustomerAddress Address { get; set; } = default!;
+}

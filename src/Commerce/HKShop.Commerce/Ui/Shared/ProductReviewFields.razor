@@ -1,0 +1,19 @@
+@namespace HKShop.Commerce.Ui.Shared
+
+<label>Rating
+    <select name="rating" required>
+        <option value="">Select a rating</option>
+        @for (var rating = 5; rating >= 1; rating--)
+        {
+            <option value="@rating" selected="@(rating == Rating)">@rating @(rating == 1 ? "star" : "stars")</option>
+        }
+    </select>
+</label>
+<label>Review
+    <textarea name="content" rows="4" maxlength="@ProductReview.MaxContentLength" required>@Content</textarea>
+</label>
+
+@code {
+    [Parameter] public int? Rating { get; set; }
+    [Parameter] public string? Content { get; set; }
+}

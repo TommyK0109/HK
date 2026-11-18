@@ -1,0 +1,54 @@
+@page "/eoffice/login"
+@page "/eoffice/mfa"
+@page "/eoffice/denied"
+@layout EOfficeLayout
+@inject IShopRequestContext Request
+
+<PageTitle>@Title · HKShop EOffice</PageTitle>
+<section class="account-card panel">
+    <h1>@Title</h1>
+    @switch (Screen)
+    {
+        case "login":
+            <form class="form-stack" method="post" action="/api/eoffice/account/login">
+                <AntiforgeryToken />
+                <input type="hidden" name="returnUrl" value="@ReturnUrl" />
+                <label>Email <input type="email" name="email" autocomplete="username" maxlength="256" required /></label>
+                <label>Password <input type="password" name="password" autocomplete="current-password" maxlength="128" required /></label>
+                <button class="button block" type="submit">Sign in to EOffice</button>
+            </form>
+            break;
+        case "mfa":
+            <form class="form-stack" method="post" action="/api/eoffice/account/mfa">
+                <AntiforgeryToken />
+                <input type="hidden" name="returnUrl" value="@ReturnUrl" />
+                <label>Code from your authenticator app
+                    <input name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="12" required />
+                </label>
+                <button class="button block" type="submit">Verify</button>
+            </form>
+            break;
+        case "denied":
+            <p>Staff, administrator, and shipper accounts need two-step verification and the required EOffice role to access this page.</p>
+            <a class="button" href="/eoffice/security">Open account security</a>
+            break;
+    }
+</section>
+
+@code {
+    [SupplyParameterFromQuery] public string? ReturnUrl { get; set; }
+
+    private string Screen => (Request.Context.Request.Path.Value ?? "").TrimEnd('/').ToLowerInvariant() switch
+    {
+        "/eoffice/mfa" => "mfa",
+        "/eoffice/denied" => "denied",
+        _ => "login"
+    };
+
+    private string Title => Screen switch
+    {
+        "login" => "EOffice Sign in",
+        "mfa" => "Two-step verification",
+        _ => "You do not have access"
+    };
+}

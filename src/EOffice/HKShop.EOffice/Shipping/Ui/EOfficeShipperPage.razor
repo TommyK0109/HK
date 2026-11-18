@@ -1,0 +1,130 @@
+@page "/eoffice/shipper"
+@layout EOfficeLayout
+@attribute [Authorize(Policy = ShopPolicies.EOfficeShipper)]
+@inject IShopRequestContext Request
+@inject TransportService Transport
+@inject TransportSettings Settings
+
+<PageTitle>Shipper workspace · HKShop EOffice</PageTitle>
+<h1>HKShop shipper</h1>
+@if (error is not null)
+{
+    <p class="message message-error" role="alert">@error</p>
+}
+else
+{
+    <section class="panel" data-shipper-workspace data-assignment="@assignmentId?.ToString("D")"
+             data-stage="@job?.Parcel.Stage.ToString()" data-verified="@(job?.Parcel.FundsVerifiedAt.HasValue == true ? "true" : "false")">
+        <form method="post" action="/api/eoffice/shipper/presence" data-shipper-presence>
+            <AntiforgeryToken />
+            <label class="check"><input type="checkbox" name="onDuty" value="true" checked="@onDuty" /> Available for pickup</label>
+            <p class="muted" data-shipper-message role="status">Keep this page open while available so HKShop can receive your location.</p>
+        </form>
+        @if (job is null)
+        {
+            <p>No pickup assigned.</p>
+        }
+        else
+        {
+            var parcel = job.Parcel;
+            <h2>@job.Number</h2>
+            <p class="status">@ShopDisplay.Status(parcel.Stage)</p>
+            @if (parcel.Stage is TransportStage.Assigned or TransportStage.Acknowledged or TransportStage.Returning)
+            {
+                <p>Pickup location<br /><strong>@parcel.PickupAddress</strong></p>
+            }
+            @if (parcel.Stage == TransportStage.Assigned && parcel.AcknowledgeBy is { } due)
+            {
+                <p>Respond by @ShopDisplay.Date(due).</p>
+                <form method="post" action="@Action("respond")" class="row-actions">
+                    <AntiforgeryToken />
+                    <input type="hidden" name="assignmentId" value="@assignmentId" />
+                    <button type="submit" name="accept" value="true" class="button">Accept pickup</button>
+                    <button type="submit" name="accept" value="false" class="button secondary">Decline</button>
+                </form>
+            }
+            @if (parcel.Stage == TransportStage.Acknowledged && assignmentId is { } accepted)
+            {
+                <p>Give the seller pickup code <strong>@TransportService.PickupCode(accepted)</strong> when collecting the parcel.</p>
+            }
+            @if (parcel.Stage == TransportStage.PickedUp)
+            {
+                <p>@job.Recipient · <a href="@($"tel:{job.Phone}")">@job.Phone</a><br />@job.Destination</p>
+                <p>Delivery fee @ShopDisplay.Money(job.ShippingVnd)</p>
+                @if (job.Method == PaymentMethod.TransportAtDelivery && parcel.FundsVerifiedAt is null)
+                {
+                    <p>Collect @ShopDisplay.Money(job.TotalVnd) in cash or request a bank transfer for that amount.</p>
+                    <dl>
+                        <div><dt>Bank</dt><dd>@Settings.BankName</dd></div>
+                        <div><dt>HKShop account</dt><dd>@Settings.BankAccount</dd></div>
+                        <div><dt>Buyer transfer reference</dt><dd>@TransportService.DoorReference(parcel.SellerOrderId)</dd></div>
+                    </dl>
+                    <p>If paid in cash, keep @ShopDisplay.Money(job.ShippingVnd) and transfer
+                        @ShopDisplay.Money(job.TotalVnd - job.ShippingVnd) to HKShop with reference
+                        <strong>@TransportService.RemittanceReference(parcel.SellerOrderId)</strong>.</p>
+                }
+                else if (job.Method == PaymentMethod.TransportAtDelivery)
+                {
+                    <p>HKShop verified the buyer's transfer.</p>
+                }
+                <form method="post" action="@Action("deliver")" class="form-stack">
+                    <AntiforgeryToken />
+                    @if (job.Method == PaymentMethod.TransportAtDelivery)
+                    {
+                        <input type="hidden" name="payment" value="@(parcel.FundsVerifiedAt is null ? DoorPayment.Cash : DoorPayment.BankTransfer)" />
+                        @if (parcel.FundsVerifiedAt is null)
+                        {
+                            <label>Cash collected <input type="number" name="cash" min="0" step="1" required /></label>
+                        }
+                    }
+                    <label>Buyer delivery code <input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required /></label>
+                    <button type="submit" class="button">Confirm delivery</button>
+                </form>
+                <form method="post" action="@Action("return")" class="form-stack top-space">
+                    <AntiforgeryToken />
+                    <label>Delivery issue <input name="reason" maxlength="250" required /></label>
+                    <button type="submit" class="button secondary">Return parcel to seller</button>
+                </form>
+            }
+        }
+    </section>
+    @if (remittances.Count > 0)
+    {
+        <section class="panel top-space">
+            <h2>Cash to remit</h2>
+            <p>@Settings.BankName · HKShop account @Settings.BankAccount</p>
+            <ul class="clean-list">
+                @foreach (var row in remittances)
+                {
+                    <li><strong>@row.Number</strong><span>@ShopDisplay.Money(row.TotalVnd - row.ShippingVnd)</span>
+                        <small>@TransportService.RemittanceReference(row.Parcel.SellerOrderId)</small></li>
+                }
+            </ul>
+        </section>
+    }
+}
+
+@code {
+    private TransportJob? job;
+    private IReadOnlyList<TransportJob> remittances = [];
+    private Guid? assignmentId;
+    private bool onDuty;
+    private string? error;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        try
+        {
+            var actor = await Request.Actor();
+            (onDuty, job, assignmentId) = await Transport.ShipperJob(actor);
+            remittances = await Transport.ShipperRemittances(actor);
+        }
+        catch (ShopRuleException problem)
+        {
+            Request.Context.Response.StatusCode = 403;
+            error = problem.Message;
+        }
+    }
+
+    private string Action(string action) => $"/api/eoffice/shipper/jobs/{job?.Parcel.SellerOrderId:D}/{action}";
+}

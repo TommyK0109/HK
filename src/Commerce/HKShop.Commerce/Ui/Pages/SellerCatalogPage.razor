@@ -1,0 +1,218 @@
+@page "/seller/{SellerId:long}/catalog"
+@attribute [Authorize(Policy = ShopPolicies.CommerceSellerMfa)]
+@using HKShop.Application.Sellers
+@using HKShop.Domain.Sellers
+@inject SellerCatalogService Catalog
+@inject IShopRequestContext Request
+
+<PageTitle>Offers and inventory · HKShop</PageTitle>
+
+@if (denied)
+{
+    <h1>You do not have permission to manage this store catalog</h1>
+    <a class="back" href="/seller">Back to stores</a>
+}
+else if (catalog is not null)
+{
+    <a class="back" href="@($"/seller/{SellerId}")">← Back to store</a>
+    <h1>Offers and inventory</h1>
+    <p class="muted">@catalog.Seller.DisplayName</p>
+
+    <section class="panel">
+        <h2>Store offers</h2>
+        @if (catalog.Offers.Total == 0)
+        {
+            <p>There are no offers yet.</p>
+        }
+        @foreach (var offer in catalog.Offers.Items)
+        {
+            var offerAction = $"{ActionPath}/offers/{offer.Id}";
+            <details class="editor" open="@(HistoryId == offer.Id)">
+                <summary>@offer.Product · @offer.Code · @ShopDisplay.Money(offer.PriceVnd ?? 0) <span class="status">@OfferStatus(offer.Status)</span></summary>
+                <p class="muted">@offer.Variant · Available @offer.Available · In stock @offer.OnHand · Reserved @offer.Reserved</p>
+                <div class="panel-grid">
+                    <form class="form-stack" method="post" action="@offerAction">
+                        <AntiforgeryToken />
+                        <label>Offer code <input name="code" value="@offer.Code" maxlength="64" required /></label>
+                        <label>Price (VND) <input name="price" value="@PriceInput(offer.PriceVnd)" type="number" min="1" step="1" required /></label>
+                        <button class="button secondary" type="submit">@(offer.Status is SellerOfferStatus.Rejected or SellerOfferStatus.Archived ? "Resubmit for review" : "Save offer")</button>
+                    </form>
+                    @if (offer.Status != SellerOfferStatus.Archived)
+                    {
+                        <form class="form-stack" method="post" action="@($"/api/commerce/inventory/seller/{SellerId}/offers/{offer.Id}/stock")">
+                            <AntiforgeryToken />
+                            <label>Adjustment amount <input name="delta" type="number" step="1" required /></label>
+                            <label>Reason <input name="reason" maxlength="250" required /></label>
+                            <button class="button secondary" type="submit">Update inventory</button>
+                        </form>
+                    }
+                </div>
+                <div class="heading-row top-space">
+                    <a href="@($"{OfferUrl(catalog.Offers.Number)}&history={offer.Id}#stock-history")">View inventory history</a>
+                    @if (offer.Status != SellerOfferStatus.Archived)
+                    {
+                        <form method="post" action="@($"{offerAction}/archive")">
+                            <AntiforgeryToken />
+                            <button class="text-button" type="submit">Stop selling</button>
+                        </form>
+                    }
+                </div>
+            </details>
+        }
+        <Pager Current="catalog.Offers.Number" Last="catalog.Offers.Last" Url="OfferUrl" />
+    </section>
+
+    @if (catalog.HistoryOffer is { } selected)
+    {
+        <section id="stock-history" class="panel top-space">
+            <h2>Inventory history · @selected.Code</h2>
+            @if (catalog.History.Count == 0)
+            {
+                <p>No changes yet.</p>
+            }
+            else
+            {
+                <div class="table-wrap"><table>
+                    <thead><tr><th scope="col">Time</th><th scope="col">On hand</th><th scope="col">Reserved</th><th scope="col">Reason</th></tr></thead>
+                    <tbody>
+                        @foreach (var movement in catalog.History)
+                        {
+                            <tr><td>@ShopDisplay.Date(movement.OccurredAt)</td><td>@movement.OnHandDelta</td><td>@movement.ReservedDelta</td><td>@ShopDisplay.StockReason(movement.Reason)</td></tr>
+                        }
+                    </tbody>
+                </table></div>
+            }
+        </section>
+    }
+
+    <div class="panel-grid top-space">
+        <section id="new-offer" class="panel">
+            <h2>Add offer</h2>
+            <form class="filter-bar compact" method="get" action="@($"{CatalogPath}#new-offer")">
+                <label>Product name or SKU <input name="q" value="@Search" maxlength="100" /></label>
+                <button class="button secondary" type="submit">Search variants</button>
+            </form>
+            @if (catalog.Variants.Count == 0)
+            {
+                <p>No matching variants to add.</p>
+            }
+            else
+            {
+                <form class="form-stack" method="post" action="@($"{ActionPath}/offers")">
+                    <AntiforgeryToken />
+                    <label>Variant
+                        <select name="skuId" required>
+                            <option value="">Select a variant</option>
+                            @foreach (var variant in catalog.Variants)
+                            {
+                                <option value="@variant.Id">@VariantLabel(variant)</option>
+                            }
+                        </select>
+                    </label>
+                    <label>Offer code <input name="code" maxlength="64" required /></label>
+                    <label>Price (VND) <input name="price" type="number" min="1" step="1" required /></label>
+                    <label>Initial stock quantity <input name="quantity" type="number" min="0" step="1" value="0" required /></label>
+                    <button class="button" type="submit">Submit offer for review</button>
+                </form>
+            }
+        </section>
+        <section class="panel">
+            <h2>Propose a new product</h2>
+            @if (catalog.Categories.Count == 0)
+            {
+                <p>There are no active categories for proposals.</p>
+            }
+            else
+            {
+                <form class="form-stack" method="post" action="@($"{ActionPath}/proposals")">
+                    <AntiforgeryToken />
+                    <label>Product name <input name="name" maxlength="150" required /></label>
+                    <label>Slug <input name="slug" maxlength="150" pattern="[A-Za-z0-9\-]+" required /></label>
+                    <label>Category
+                        <select name="categoryId" required>
+                            <option value="">Select a category</option>
+                            @foreach (var category in catalog.Categories)
+                            {
+                                <option value="@category.Id">@category.Name</option>
+                            }
+                        </select>
+                    </label>
+                    <label>Description <textarea name="description" maxlength="4000" rows="4"></textarea></label>
+                    <button class="button secondary" type="submit">Submit proposal</button>
+                </form>
+            }
+        </section>
+    </div>
+
+    <section id="proposals" class="panel top-space">
+        <h2>Submitted proposals</h2>
+        @if (catalog.Proposals.Total == 0)
+        {
+            <p>No proposals yet.</p>
+        }
+        <ul class="clean-list">
+            @foreach (var proposal in catalog.Proposals.Items)
+            {
+                <li>
+                    <div>@proposal.Name<br /><small>@ShopDisplay.Date(proposal.CreatedAt)</small></div>
+                    <span class="status">@ProposalStatus(proposal.Status)</span>
+                </li>
+            }
+        </ul>
+        <Pager Current="catalog.Proposals.Number" Last="catalog.Proposals.Last" Url="ProposalUrl" />
+    </section>
+}
+
+@code {
+    [Parameter] public long SellerId { get; set; }
+    [SupplyParameterFromQuery(Name = "q")] public string? Search { get; set; }
+    [SupplyParameterFromQuery(Name = "offers")] public int? OfferPage { get; set; }
+    [SupplyParameterFromQuery(Name = "proposals")] public int? ProposalPage { get; set; }
+    [SupplyParameterFromQuery(Name = "history")] public long? HistoryId { get; set; }
+    private SellerCatalogView? catalog;
+    private bool denied;
+    private string CatalogPath => $"/seller/{SellerId}/catalog";
+    private string ActionPath => $"/api/commerce/seller/{SellerId}/catalog";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        catalog = null;
+        denied = false;
+        try
+        {
+            catalog = await Catalog.Catalog(await Request.Actor(), SellerId, Search, OfferPage ?? 1, ProposalPage ?? 1, HistoryId);
+        }
+        catch (SellerAccessDeniedException)
+        {
+            denied = true;
+            if (!Request.Context.Response.HasStarted) Request.Context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        }
+    }
+
+    private string OfferUrl(int page) => PageUrl(page, catalog?.Proposals.Number ?? 1);
+    private string ProposalUrl(int page) => $"{PageUrl(catalog?.Offers.Number ?? 1, page)}#proposals";
+    private string PageUrl(int offers, int proposals) => QueryHelpers.AddQueryString(CatalogPath, new Dictionary<string, string?>
+    {
+        ["q"] = Search, ["offers"] = offers.ToString(CultureInfo.InvariantCulture),
+        ["proposals"] = proposals.ToString(CultureInfo.InvariantCulture)
+    });
+
+    private static string PriceInput(decimal? price) => price?.ToString("0", CultureInfo.InvariantCulture) ?? "";
+    private static string VariantLabel(SellerCatalogVariant variant) => string.Join(" · ",
+        new[] { variant.Product, variant.Code, variant.Size, variant.Color }.Where(value => !string.IsNullOrWhiteSpace(value)));
+    private static string OfferStatus(SellerOfferStatus status) => status switch
+    {
+        SellerOfferStatus.Pending => "Pending review",
+        SellerOfferStatus.Approved => "Approved",
+        SellerOfferStatus.Rejected => "Rejected",
+        SellerOfferStatus.Archived => "Stopped selling",
+        _ => status.ToString()
+    };
+    private static string ProposalStatus(ProductProposalStatus status) => status switch
+    {
+        ProductProposalStatus.Pending => "Pending review",
+        ProductProposalStatus.Approved => "Proposal approved",
+        ProductProposalStatus.Rejected => "Rejected",
+        _ => status.ToString()
+    };
+}

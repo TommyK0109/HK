@@ -1,0 +1,98 @@
+@page "/eoffice/products/{Id:int}"
+@layout EOfficeLayout
+@attribute [Authorize(Policy = ShopPolicies.EOfficeStaff)]
+@inject ICatalogOperationsPort Catalog
+@inject IProductImageStore Media
+@inject IShopRequestContext Request
+
+<PageTitle>Edit product · HKShop EOffice</PageTitle>
+<a class="back" href="/eoffice/products">← Catalog</a>
+@if (details is null)
+{
+    <section class="empty-state"><h1>Product not found</h1></section>
+}
+else
+{
+    var product = details.Product;
+    <div class="heading-row">
+        <h1>@product.Name</h1>
+        <form method="post" action="/api/eoffice/catalog/publication">
+            <AntiforgeryToken /><input type="hidden" name="id" value="@product.Id" />
+            <input type="hidden" name="publish" value="@(product.Status != ProductStatus.Published ? "true" : "false")" />
+            <button class="button" type="submit">@(product.Status == ProductStatus.Published ? "Unpublish product" : "Publish")</button>
+        </form>
+    </div>
+    @if (product.LegacyPrice is not null)
+    {
+        <p class="message">Legacy price: @product.LegacyPrice.Value.ToString("N2") ₫. Check and set a whole VND price for the SKU before publishing.</p>
+    }
+    <div class="panel-grid">
+        <section class="panel">
+            <h2>Details</h2>
+            <form class="form-stack" method="post" action="/api/eoffice/catalog/product">
+                <AntiforgeryToken /><input type="hidden" name="id" value="@product.Id" />
+                <label>Product name <input name="name" value="@product.Name" maxlength="150" required /></label>
+                <label>Slug <input name="slug" value="@product.Slug" maxlength="150" required /></label>
+                <label>Catalog
+                    <select name="categoryId">
+                        <option value="">Select a category</option>
+                        @foreach (var category in categories)
+                        {
+                            <option value="@category.Id" selected="@(category.Id == product.CategoryId)">@category.Name</option>
+                        }
+                    </select>
+                </label>
+                <label>Description <textarea name="description" maxlength="4000">@product.Description</textarea></label>
+                <button class="button secondary" type="submit">Save details</button>
+            </form>
+        </section>
+        <section class="panel">
+            <h2>Product images</h2>
+            @if (details.Images.Count > 0)
+            {
+                <ul class="admin-images">
+                    @foreach (var image in details.Images)
+                    {
+                        <li><img src="@Media.Url(image.FileName)" alt="@image.Alt" width="100" height="100" loading="lazy" /></li>
+                    }
+                </ul>
+            }
+            <form class="form-stack" method="post" enctype="multipart/form-data" action="/api/eoffice/catalog/image">
+                <AntiforgeryToken /><input type="hidden" name="productId" value="@product.Id" />
+                <label>JPEG, PNG, or WebP image, up to 5 MB
+                    <input name="image" type="file" accept="image/jpeg,image/png,image/webp" required />
+                </label>
+                <label>Image description <input name="alt" maxlength="200" required /></label>
+                <button class="button secondary" type="submit">Upload image</button>
+            </form>
+        </section>
+    </div>
+    <section class="panel top-space">
+        <h2>Variant</h2>
+        @foreach (var sku in details.Variants)
+        {
+            <details class="editor">
+                <summary>@sku.Code · @(sku.Active ? "Active" : "Inactive") · Available @sku.Available · Marketplace available @sku.TotalOfferAvailable (on hand @sku.TotalOfferOnHand)</summary>
+                <SkuEditor ProductId="product.Id" Sku="sku" />
+            </details>
+        }
+        <details class="editor">
+            <summary>Add SKU</summary>
+            <SkuEditor ProductId="product.Id" />
+        </details>
+    </section>
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+    private CatalogEditDetailsDto? details;
+    private IReadOnlyList<CatalogCategoryDto> categories = [];
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var actor = await Request.Actor();
+        try { details = await Catalog.EditDetailsAsync(actor, Id); }
+        catch (ShopRuleException) { Request.Context.Response.StatusCode = 404; }
+        categories = await Catalog.CategoriesAsync(false);
+    }
+}

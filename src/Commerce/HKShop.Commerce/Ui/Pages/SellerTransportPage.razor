@@ -1,0 +1,31 @@
+@page "/seller/{SellerId:long}/transport"
+@attribute [Authorize(Policy = ShopPolicies.CommerceSellerMfa)]
+@using HKShop.Contracts.Ports
+@inject IShopRequestContext Request
+@inject IShippingGateway Shipping
+
+<PageTitle>Pickup location · HKShop</PageTitle>
+<a class="back" href="@($"/seller/{SellerId}/orders")">← Orders and returns</a>
+<h1>Pickup location</h1>
+@if (location is not null)
+{
+    <section class="panel">
+        <p>HKShop shippers pick up orders here. Checkout calculates the delivery fee from this pin.</p>
+        <form class="form-stack" method="post" action="@($"/api/commerce/seller/{SellerId}/transport/location")">
+            <AntiforgeryToken />
+            <label>Storage address <input name="address" value="@location.PickupAddress" maxlength="300" required /></label>
+            <TransportPin Latitude="location.Latitude" Longitude="location.Longitude" Required="true" Label="Storage location" />
+            <button type="submit" class="button">Save pickup location</button>
+        </form>
+    </section>
+}
+
+@code {
+    [Parameter] public long SellerId { get; set; }
+    private SellerLocationSummary? location;
+    protected override async Task OnParametersSetAsync()
+    {
+        location = await Shipping.GetSellerLocationAsync(await Request.Actor(), SellerId);
+        if (location is null) Request.Context.Response.StatusCode = 404;
+    }
+}

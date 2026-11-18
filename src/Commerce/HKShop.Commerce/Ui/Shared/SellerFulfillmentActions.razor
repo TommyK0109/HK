@@ -1,0 +1,83 @@
+@namespace HKShop.Commerce.Ui.Shared
+
+@if (Status is OrderStatus.Confirmed or OrderStatus.Packing or OrderStatus.Shipped)
+{
+    <section class="top-space">
+        <h4>Order fulfillment</h4>
+        @if (Status is OrderStatus.Confirmed or OrderStatus.Packing)
+        {
+            <div class="panel-grid">
+                @if (Status == OrderStatus.Confirmed)
+                {
+                    <form method="post" action="@Action("pack")">
+                        <AntiforgeryToken />
+                        <button class="button" type="submit">Start packing</button>
+                    </form>
+                }
+                else if (Parcel is null)
+                {
+                    <form class="form-stack" method="post" action="@Action("dispatch")">
+                        <AntiforgeryToken />
+                        <label>Carrier <input name="carrier" maxlength="100" required /></label>
+                        <label>Tracking number <input name="tracking" maxlength="100" required /></label>
+                        <button class="button" type="submit">Ship order</button>
+                    </form>
+                }
+                <form class="form-stack" method="post" action="@Action("cancel")">
+                    <AntiforgeryToken />
+                    <label>Cancellation reason <input name="reason" maxlength="250" /></label>
+                    <button class="button secondary" type="submit">Cancel store order</button>
+                </form>
+            </div>
+        }
+        else
+        {
+            <div class="panel-grid">
+                @if (Parcel is null)
+                {
+                    <form class="form-stack" method="post" action="@Action("deliver")">
+                        <AntiforgeryToken />
+                        @if (Method == PaymentMethod.Cod)
+                        {
+                            <label>Simulated COD amount collected <input name="collected" type="number" min="0" step="1" value="@ShopDisplay.Number(TotalVnd)" required /></label>
+                            <label>Payment reference <input name="reference" maxlength="100" required /></label>
+                        }
+                        <button class="button" type="submit">Confirm delivery</button>
+                    </form>
+                    <form class="form-stack" method="post" action="@Action("exception")">
+                        <AntiforgeryToken />
+                        <label>Delivery issue <input name="note" maxlength="250" required /></label>
+                        <button class="button secondary" type="submit">Record issue</button>
+                    </form>
+                }
+                @if (Parcel is null || Parcel.Stage == TransportStage.Returning)
+                {
+                    <form class="form-stack" method="post" action="@Action("undeliverable")">
+                        <AntiforgeryToken />
+                        <h3>Receive returned parcel</h3>
+                        @foreach (var item in Items)
+                        {
+                            <input type="hidden" name="itemId" value="@item.Id" />
+                            <label>@item.SkuCode · Quantity to restock
+                                <input name="quantity" type="number" min="0" max="@item.Quantity" value="0" required />
+                            </label>
+                        }
+                        <label>Reason <input name="reason" maxlength="250" required /></label>
+                        <button class="button secondary" type="submit">Confirm undeliverable</button>
+                    </form>
+                }
+            </div>
+        }
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public string ActionPath { get; set; } = "";
+    [Parameter, EditorRequired] public IReadOnlyList<OrderItem> Items { get; set; } = [];
+    [Parameter] public OrderStatus Status { get; set; }
+    [Parameter] public PaymentMethod Method { get; set; }
+    [Parameter] public decimal TotalVnd { get; set; }
+    [Parameter] public TransportParcelSummary? Parcel { get; set; }
+
+    private string Action(string action) => $"{ActionPath}/{action}";
+}

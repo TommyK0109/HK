@@ -1,0 +1,68 @@
+@page "/seller"
+@attribute [Authorize(Policy = ShopPolicies.CommerceAccount)]
+@using HKShop.Application.Sellers
+@inject SellerService Sellers
+@inject IShopRequestContext Request
+
+<PageTitle>Seller center · HKShop</PageTitle>
+<h1>Seller center</h1>
+
+@if (!actor.Verified)
+{
+    <p class="message message-error" role="alert">Confirm your email and sign in again to continue.</p>
+    <a href="/account/resend">Resend confirmation email</a>
+}
+else
+{
+    <div class="panel-grid">
+        @if (actor.Mfa)
+        {
+            <section class="panel">
+                <h2>Your stores</h2>
+                @if (workspaces.Count == 0)
+                {
+                    <p>You are not a member of any stores.</p>
+                }
+                else
+                {
+                    <ul class="clean-list">
+                        @foreach (var workspace in workspaces)
+                        {
+                            <li>
+                                <div><a href="@($"/seller/{workspace.Id}")">@workspace.DisplayName</a><br /><small>@ShopDisplay.Role(workspace.Role)</small></div>
+                                <span class="status">@ShopDisplay.Status(workspace.Status)</span>
+                            </li>
+                        }
+                    </ul>
+                }
+            </section>
+        }
+        else
+        {
+            <SellerMfaPrompt ReturnUrl="/seller" />
+        }
+        <section class="panel">
+            <h2>Register a store</h2>
+            <form class="form-stack" method="post" action="/api/commerce/seller/register">
+                <AntiforgeryToken />
+                <label>Store name <input name="displayName" autocomplete="organization" maxlength="100" required /></label>
+                <label>Store slug
+                    <input name="slug" autocapitalize="none" spellcheck="false" minlength="3" maxlength="64" aria-describedby="seller-slug-hint" required />
+                </label>
+                <p id="seller-slug-hint" class="muted">Use unaccented letters, numbers, and hyphens.</p>
+                <button class="button" type="submit">Submit registration</button>
+            </form>
+        </section>
+    </div>
+}
+
+@code {
+    private ShopActor actor = new("", "", false, false, false);
+    private IReadOnlyList<SellerWorkspace> workspaces = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        actor = await Request.Actor();
+        if (actor.Verified && actor.Mfa) workspaces = await Sellers.Mine(actor);
+    }
+}

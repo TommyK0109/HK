@@ -1,0 +1,83 @@
+@page "/eoffice"
+@page "/eoffice/products"
+@layout EOfficeLayout
+@attribute [Authorize(Policy = ShopPolicies.EOfficeStaff)]
+@inject ICatalogOperationsPort Catalog
+@inject IShopRequestContext Request
+
+<PageTitle>Catalog management · HKShop EOffice</PageTitle>
+<h1>Catalog management</h1>
+<div class="panel-grid">
+    <section class="panel">
+        <h2>Create product</h2>
+        <form class="form-stack" method="post" action="/api/eoffice/catalog/product">
+            <AntiforgeryToken />
+            <input type="hidden" name="id" value="0" />
+            <label>Product name <input name="name" maxlength="150" required /></label>
+            <label>Slug <input name="slug" maxlength="150" placeholder="example-product-name" pattern="[A-Za-z0-9\-]+" required /></label>
+            <label>Catalog
+                <select name="categoryId">
+                    <option value="">Choose later</option>
+                    @foreach (var category in categories) { <option value="@category.Id">@category.Name</option> }
+                </select>
+            </label>
+            <label>Description <textarea name="description" maxlength="4000"></textarea></label>
+            <button class="button" type="submit">Create draft</button>
+        </form>
+    </section>
+    <section class="panel">
+        <h2>Catalog</h2>
+        <form class="form-stack" method="post" action="/api/eoffice/catalog/category">
+            <AntiforgeryToken />
+            <input type="hidden" name="id" value="0" />
+            <input type="hidden" name="active" value="true" />
+            <label>New category name <input name="name" maxlength="100" required /></label>
+            <button class="button secondary" type="submit">Add category</button>
+        </form>
+        @foreach (var category in categories)
+        {
+            <details class="editor">
+                <summary>@category.Name · @(category.Active ? "Active" : "Hidden")</summary>
+                <form class="form-stack" method="post" action="/api/eoffice/catalog/category">
+                    <AntiforgeryToken />
+                    <input type="hidden" name="id" value="@category.Id" />
+                    <label>Category name <input name="name" value="@category.Name" maxlength="100" required /></label>
+                    <label class="check"><input type="checkbox" name="active" value="true" checked="@category.Active" /> Active</label>
+                    <button class="button secondary" type="submit">Save category</button>
+                </form>
+            </details>
+        }
+    </section>
+</div>
+<section class="top-space">
+    <h2>Products</h2>
+    @if (products?.Items.Count > 0)
+    {
+        <div class="table-wrap"><table>
+            <thead><tr><th scope="col">ID</th><th scope="col">Name</th><th scope="col">Status</th></tr></thead>
+            <tbody>
+                @foreach (var row in products.Items)
+                {
+                    <tr><td>@row.Id</td><td><a href="/eoffice/products/@row.Id">@row.Name</a></td>
+                        <td>@(row.Status == ProductStatus.Published ? "Published" : row.Status == ProductStatus.Draft ? "Draft" : "Hidden")</td></tr>
+                }
+            </tbody>
+        </table></div>
+        <Pager Current="products.Number" Last="products.Last" Url="PageUrl" />
+    }
+    else { <p class="muted">No products yet.</p> }
+</section>
+
+@code {
+    [SupplyParameterFromQuery(Name = "page")] public int? Number { get; set; }
+    private IReadOnlyList<CatalogCategoryDto> categories = [];
+    private Page<CatalogProductDto>? products;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var actor = await Request.Actor();
+        categories = await Catalog.CategoriesAsync(false);
+        products = await Catalog.ProductsAsync(actor, Number ?? 1);
+    }
+    private static string PageUrl(int page) => $"/eoffice/products?page={page}";
+}

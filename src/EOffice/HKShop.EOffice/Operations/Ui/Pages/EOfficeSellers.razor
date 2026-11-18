@@ -1,0 +1,61 @@
+@page "/eoffice/sellers"
+@layout EOfficeLayout
+@attribute [Authorize(Policy = ShopPolicies.EOfficeAdmin)]
+@inject ICommerceOperationsPort Commerce
+@inject IShopRequestContext Request
+
+<PageTitle>Store management · HKShop EOffice</PageTitle>
+<h1>Store</h1>
+
+@if (sellers is not null)
+{
+    <section class="panel">
+        <h2>Store registrations and status</h2>
+        @if (sellers.Total == 0)
+        {
+            <p>No stores registered yet.</p>
+        }
+        @foreach (var seller in sellers.Items)
+        {
+            <details class="editor">
+                <summary>@seller.DisplayName <span class="status">@ShopDisplay.Status(seller.Status)</span></summary>
+                <p>Store slug <strong>@seller.Slug</strong></p>
+                @if (seller.Id == 1)
+                {
+                    <p class="muted">HKShop store</p>
+                }
+                else
+                {
+                    <p class="muted">@seller.OwnerEmail · Registered @ShopDisplay.Date(seller.CreatedAt)</p>
+                    var active = seller.Status == SellerStatus.Active;
+                    var nextStatus = active ? SellerStatus.Suspended : SellerStatus.Active;
+                    var action = seller.Status switch
+                    {
+                        SellerStatus.Pending => "Approve store",
+                        SellerStatus.Active => "Suspend store",
+                        _ => "Restore store"
+                    };
+                    <form class="form-stack narrow" method="post" action="@($"/api/eoffice/sellers/{seller.Id}/status")">
+                        <AntiforgeryToken />
+                        <input name="status" type="hidden" value="@nextStatus" />
+                        <label>
+                            @(active ? "Suspension reason" : "Reason (optional)")
+                            <input name="reason" maxlength="250" required="@active" />
+                        </label>
+                        <button class="button secondary" type="submit">@action</button>
+                    </form>
+                }
+            </details>
+        }
+        <Pager Current="sellers.Number" Last="sellers.Last" Url="PageUrl" />
+    </section>
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "page")] public int? Number { get; set; }
+    private Page<PlatformSeller>? sellers;
+
+    protected override async Task OnParametersSetAsync() => sellers = await Commerce.PlatformSellersAsync(await Request.Actor(), Number ?? 1);
+
+    private static string PageUrl(int page) => $"/eoffice/sellers?page={page}";
+}

@@ -1,0 +1,170 @@
+@page "/eoffice/payments"
+@layout EOfficeLayout
+@attribute [Authorize(Policy = ShopPolicies.EOfficeAdmin)]
+@inject ICommerceOperationsPort Commerce
+@inject IShopRequestContext Request
+
+<PageTitle>Payment Reconciliation · HKShop EOffice</PageTitle>
+<h1>Payment Reconciliation</h1>
+<div class="panel-grid">
+    <section class="panel">
+        <h2>SePay Attempts Requiring Attention</h2>
+        @if (issues.Count == 0) { <p>No payment issues pending review.</p> }
+        @foreach (var issue in issues)
+        {
+            <article class="editor">
+                <h3><a href="/eoffice/orders/@issue.OrderId">@ShopDisplay.ShortOrder(issue.Number)</a></h3>
+                <p>@issue.ProviderInvoice · @issue.Status · @ShopDisplay.Date(issue.CreatedAt)</p>
+                <p>Expected @ShopDisplay.Money(issue.ExpectedVnd) · Captured @ShopDisplay.Money(issue.CapturedVnd)</p>
+                @if (issue.Issue.Length > 0) { <p class="field-error">@issue.Issue</p> }
+                <form method="post" action="/api/eoffice/payments/reconcile">
+                    <AntiforgeryToken /><input type="hidden" name="id" value="@issue.OrderId" />
+                    <button class="button secondary" type="submit">Query SePay</button>
+                </form>
+            </article>
+        }
+    </section>
+    <section class="panel">
+        <h2>Pending Refunds</h2>
+        @if (refunds.Count == 0) { <p>No pending refunds.</p> }
+        @foreach (var refund in refunds)
+        {
+            <article class="editor">
+                <h3>@ShopDisplay.Money(refund.AmountVnd) · <a href="/eoffice/orders/@refund.OrderId">View Order</a></h3>
+                <p><small>Request key @refund.BusinessKey</small></p>
+                @if (refund.ProviderReference.Length > 0) { <p>Provider reference @refund.ProviderReference</p> }
+                @if (refund.Issue.Length > 0) { <p class="field-error">@refund.Issue</p> }
+                @if (refund.NextAttemptAt is null)
+                {
+                    <form class="form-stack" method="post" action="/api/eoffice/payments/refund">
+                        <AntiforgeryToken /><input type="hidden" name="id" value="@refund.Id" />
+                        <label>Confirmed refund reference <input name="reference" maxlength="100" required /></label>
+                        <button class="button secondary" type="submit">Record Refund</button>
+                    </form>
+                }
+                else
+                {
+                    <p>Next reconciliation @ShopDisplay.Date(refund.NextAttemptAt.Value)</p>
+                }
+            </article>
+        }
+    </section>
+</div>
+
+<section class="panel top-space">
+    <h2>Reconcile recent payments</h2>
+    <p class="muted">Payments made before settlement was enabled may not have ledger entries.</p>
+    @if (ledgerPayments.Count == 0)
+    {
+        <p>No payments to reconcile.</p>
+    }
+    else
+    {
+        <div class="table-wrap"><table>
+            <thead><tr>
+                <th scope="col">Order and payment attempt</th>
+                <th scope="col">Collected</th>
+                <th scope="col">Refund pending</th>
+                <th scope="col">Refunded</th>
+                <th scope="col">Ledger posting</th>
+            </tr></thead>
+            <tbody>
+                @foreach (var payment in ledgerPayments)
+                {
+                    <tr id="@($"payment-{payment.PaymentAttemptId:D}")">
+                        <td>
+                            <a href="/eoffice/orders/@payment.OrderId">@ShopDisplay.ShortOrder(payment.OrderNumber)</a>
+                            @if (payment.PaidAt is { } paidAt)
+                            {
+                                <div><small>@ShopDisplay.Date(paidAt)</small></div>
+                            }
+                            @if (!string.IsNullOrEmpty(payment.ProviderReference))
+                            {
+                                <div><small>Reference <code>@payment.ProviderReference</code></small></div>
+                            }
+                            <div><small>Payment attempt ID <code>@payment.PaymentAttemptId.ToString("D")</code></small></div>
+                            <div><small>@(payment.Applied ? "Applied to order" : "Outside the order payment")</small></div>
+                            @if (!string.IsNullOrEmpty(payment.Issue))
+                            {
+                                <small class="field-error">@payment.Issue</small>
+                            }
+                        </td>
+                        <td>@ShopDisplay.Money(payment.CapturedVnd)</td>
+                        <td>@ShopDisplay.Money(payment.PendingRefundVnd)</td>
+                        <td>@ShopDisplay.Money(payment.CompletedRefundVnd)</td>
+                        <td>@(payment.Posted ? "Posted" : "Not posted")</td>
+                    </tr>
+                }
+            </tbody>
+        </table></div>
+    }
+</section>
+
+<section class="panel top-space">
+    <h2>Reconcile recent refunds</h2>
+    @if (ledgerRefunds.Count == 0)
+    {
+        <p>No refunds yet.</p>
+    }
+    else
+    {
+        <div class="table-wrap"><table>
+            <thead><tr>
+                <th scope="col">Order and refund</th>
+                <th scope="col">Amount</th>
+                <th scope="col">Status</th>
+                <th scope="col">Ledger posting</th>
+            </tr></thead>
+            <tbody>
+                @foreach (var refund in ledgerRefunds)
+                {
+                    <tr>
+                        <td>
+                            <a href="/eoffice/orders/@refund.OrderId">@ShopDisplay.ShortOrder(refund.OrderNumber)</a>
+                            <div><small>Refund ID #@refund.RefundId</small></div>
+                            @if (refund.PaymentAttemptId is { } attemptId)
+                            {
+                                if (ledgerPayments.Any(payment => payment.PaymentAttemptId == attemptId))
+                                {
+                                    <div><small><a href="@($"#payment-{attemptId:D}")">View payment attempt</a></small></div>
+                                }
+                                else
+                                {
+                                    <div><small>Payment attempt ID <code>@attemptId.ToString("D")</code></small></div>
+                                }
+                            }
+                            @if (!string.IsNullOrEmpty(refund.Reference))
+                            {
+                                <div><small>Reference <code>@refund.Reference</code></small></div>
+                            }
+                        </td>
+                        <td>@ShopDisplay.Money(refund.AmountVnd)</td>
+                        <td>
+                            @(refund.Status == RefundStatus.Completed ? "Refunded" : "Refund pending")
+                            @if (refund.CompletedAt is { } completedAt)
+                            {
+                                <div><small>@ShopDisplay.Date(completedAt)</small></div>
+                            }
+                        </td>
+                        <td>@(refund.Posted ? "Posted" : refund.Status == RefundStatus.Pending ? "Refund pending" : "Not posted")</td>
+                    </tr>
+                }
+            </tbody>
+        </table></div>
+    }
+</section>
+
+@code {
+    private IReadOnlyList<PaymentIssue> issues = [];
+    private IReadOnlyList<EOfficeRefundDto> refunds = [];
+    private IReadOnlyList<SettlementPaymentRow> ledgerPayments = [];
+    private IReadOnlyList<SettlementRefundRow> ledgerRefunds = [];
+    protected override async Task OnInitializedAsync()
+    {
+        var actor = await Request.Actor();
+        issues = await Commerce.PaymentIssuesAsync(actor);
+        refunds = await Commerce.PendingRefundsAsync(actor);
+        ledgerPayments = await Commerce.RecentLedgerPaymentsAsync(actor);
+        ledgerRefunds = await Commerce.RecentLedgerRefundsAsync(actor);
+    }
+}

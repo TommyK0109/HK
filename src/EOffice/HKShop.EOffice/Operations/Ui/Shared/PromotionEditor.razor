@@ -1,0 +1,25 @@
+<form class="form-stack" method="post" action="/api/eoffice/promotions">
+    <AntiforgeryToken />
+    <input type="hidden" name="id" value="@Promotion.Id" />
+    <label>Promotion code <input name="code" maxlength="40" value="@Promotion.Code" required /></label>
+    <div class="form-columns">
+        <label>Type
+            <select name="percentage">
+                <option value="false" selected="@(!Promotion.IsPercentage)">Amount in VND</option>
+                <option value="true" selected="@Promotion.IsPercentage">Percentage</option>
+            </select>
+        </label>
+        <label>Value <input type="number" name="value" value="@ShopDisplay.Number(Promotion.Value)" min="0.01" step="0.01" required /></label>
+        <label>Minimum subtotal (VND) <input type="number" name="minimum" value="@ShopDisplay.Number(Promotion.MinimumVnd)" min="0" step="1" required /></label>
+        <label>Usage limit <input type="number" name="cap" value="@Promotion.UsageCap" min="1" step="1" required /></label>
+        <label>Start (Vietnam time) <input type="datetime-local" name="starts" value="@LocalDate(Promotion.StartsAt)" required /></label>
+        <label>End (Vietnam time) <input type="datetime-local" name="ends" value="@LocalDate(Promotion.EndsAt)" required /></label>
+    </div>
+    <label class="check"><input type="checkbox" name="active" value="true" checked="@Promotion.Active" /> Enabled</label>
+    <button class="button secondary" type="submit">Save promotion</button>
+</form>
+
+@code {
+    [Parameter, EditorRequired] public PromotionDto Promotion { get; set; } = default!;
+    private static string LocalDate(DateTimeOffset value) => ShopSettings.VietnamTime(value).ToString("yyyy-MM-ddTHH:mm", CultureInfo.InvariantCulture);
+}

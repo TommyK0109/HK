@@ -1,0 +1,38 @@
+@page "/checkout/requests/{Id:guid}"
+@attribute [Authorize(Policy = ShopPolicies.CommerceAccount)]
+@inject ICheckoutRequestDispatcher Checkout
+@inject IShopRequestContext Request
+@inject NavigationManager Navigation
+
+<PageTitle>Order Status · HKShop</PageTitle>
+<section class="empty-state narrow">
+    <h1>Order Status</h1>
+    @if (result is null)
+    {
+        <p>Checkout request not found.</p>
+        <a class="button" href="/cart">Back to cart</a>
+    }
+    else if (result.Status == CheckoutRequestStatus.Pending)
+    {
+        <HeadContent><meta http-equiv="refresh" content="3" /></HeadContent>
+        <p role="status">Your order is being processed. This page refreshes automatically.</p>
+        <a class="button" href="@($"/checkout/requests/{Id:D}")" data-enhance-nav="false">Check status now</a>
+    }
+    else if (result.Status == CheckoutRequestStatus.Rejected)
+    {
+        <p class="message message-error" role="alert">@result.Error</p>
+        <a class="button" href="/cart">Back to cart</a>
+    }
+</section>
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    private CheckoutResult? result;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        result = await Checkout.Get(await Request.Actor(), Id);
+        if (result is null) Request.Context.Response.StatusCode = StatusCodes.Status404NotFound;
+        else if (result.OrderId is Guid orderId) Navigation.NavigateTo($"/orders/{orderId:D}", forceLoad: true);
+    }
+}

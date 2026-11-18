@@ -1,0 +1,108 @@
+@page "/seller/{SellerId:long}/reports"
+@attribute [Authorize(Policy = ShopPolicies.CommerceSellerMfa)]
+@using HKShop.Application.Sellers
+@inject ReportingService Reports
+@inject IShopRequestContext Request
+
+<PageTitle>Seller reports · HKShop</PageTitle>
+@if (denied)
+{
+    <h1>You do not have access to this report</h1>
+    <a href="/seller">My stores</a>
+}
+else
+{
+    <a class="back" href="@($"/seller/{SellerId}")">← Back to store</a>
+    <h1>Reports @(report?.Seller.DisplayName)</h1>
+    <form class="filter-bar compact" method="get" action="@ReportPath">
+        <label>From <input type="date" name="from" value="@DateInput(start)" required /></label>
+        <label>To <input type="date" name="to" value="@DateInput(end)" required /></label>
+        @if (report?.Audit is not null)
+        {
+            <label>Audit action <input name="action" value="@ActionFilter" maxlength="100" /></label>
+        }
+        <button class="button" type="submit">Apply</button>
+    </form>
+    @if (error is not null) { <p class="message message-error" role="alert">@error</p> }
+    @if (report is not null)
+    {
+        <div class="metric-grid">
+            <div class="panel"><h2>Collected</h2><strong>@ShopDisplay.Money(report.Sales.Collected)</strong></div>
+            <div class="panel"><h2>Refunded</h2><strong>@ShopDisplay.Money(report.Sales.Refunded)</strong></div>
+            <div class="panel"><h2>Net collected</h2><strong>@ShopDisplay.Money(report.Sales.Net)</strong></div>
+        </div>
+        <section class="panel top-space">
+            <h2>Orders by status</h2>
+            @if (report.Sales.Orders.Count == 0) { <p>No orders in this date range.</p> }
+            <ul class="clean-list">
+                @foreach (var group in report.Sales.Orders)
+                {
+                    <li>@ShopDisplay.Status(group.Status)<strong>@group.Count</strong></li>
+                }
+            </ul>
+            <a class="button secondary" href="@($"/api/commerce/seller/{SellerId}/reports/export?from={DateInput(start)}&to={DateInput(end)}")">Download sales CSV</a>
+        </section>
+        @if (report.Audit is { } audit)
+        {
+            <section class="panel top-space">
+                <h2>Activity log</h2>
+                @if (audit.Total == 0) { <p>No activity in this date range.</p> }
+                else
+                {
+                    <div class="table-wrap"><table>
+                        <thead><tr><th scope="col">Date</th><th scope="col">User</th><th scope="col">Action</th><th scope="col">Target</th></tr></thead>
+                        <tbody>
+                            @foreach (var entry in audit.Items)
+                            {
+                                <tr><td>@ShopDisplay.Date(entry.OccurredAt)</td><td>@entry.ActorId</td><td>@ShopDisplay.AuditAction(entry.Action)</td><td>@entry.Target</td></tr>
+                            }
+                        </tbody>
+                    </table></div>
+                    <Pager Current="audit.Number" Last="audit.Last" Url="PageUrl" />
+                }
+            </section>
+        }
+    }
+}
+
+@code {
+    [Parameter] public long SellerId { get; set; }
+    [SupplyParameterFromQuery(Name = "from")] public string? From { get; set; }
+    [SupplyParameterFromQuery(Name = "to")] public string? To { get; set; }
+    [SupplyParameterFromQuery(Name = "action")] public string? ActionFilter { get; set; }
+    [SupplyParameterFromQuery(Name = "page")] public int? Number { get; set; }
+    private DateOnly start;
+    private DateOnly end;
+    private SellerReport? report;
+    private string? error;
+    private bool denied;
+    private string ReportPath => $"/seller/{SellerId}/reports";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        report = null;
+        error = null;
+        denied = false;
+        var today = DateOnly.FromDateTime(ShopSettings.VietnamTime(DateTimeOffset.UtcNow).DateTime);
+        start = DateOnly.TryParseExact(From, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedStart)
+            ? parsedStart : today.AddDays(-29);
+        end = DateOnly.TryParseExact(To, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedEnd)
+            ? parsedEnd : today;
+        try
+        {
+            report = await Reports.SellerReport(await Request.Actor(), SellerId, start, end, ActionFilter?.Trim(), Number ?? 1);
+        }
+        catch (SellerAccessDeniedException)
+        {
+            denied = true;
+            if (!Request.Context.Response.HasStarted) Request.Context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        }
+        catch (ShopRuleException problem) { error = problem.Message; }
+    }
+
+    private string PageUrl(int page) => QueryHelpers.AddQueryString(ReportPath, new Dictionary<string, string?>
+    {
+        ["from"] = DateInput(start), ["to"] = DateInput(end), ["action"] = ActionFilter, ["page"] = page.ToString(CultureInfo.InvariantCulture)
+    });
+    private static string DateInput(DateOnly value) => value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+}

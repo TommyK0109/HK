@@ -1,0 +1,51 @@
+@if (Order.Transport is { } parcel)
+{
+    <section class="panel top-space">
+        <h2>HKShop delivery</h2>
+        <p class="status">@(Order.Status is OrderStatus.AwaitingPayment or OrderStatus.Expired or OrderStatus.PaymentFailed
+            ? ShopDisplay.Status(Order.Status) : ShopDisplay.Status(parcel.Stage))</p>
+        <p>@parcel.PickupAddress</p>
+        @if (Order.Status == OrderStatus.Packing && parcel.Stage == TransportStage.Packing)
+        {
+            <form method="post" action="@Action("packed")">
+                <AntiforgeryToken />
+                <button type="submit" class="button">Mark packed</button>
+            </form>
+        }
+        @if (parcel.Stage == TransportStage.Packed && parcel.PickupDueAt is { } due)
+        {
+            <p>Request pickup by @ShopDisplay.Date(due).</p>
+            <form method="post" action="@Action("pickup")">
+                <AntiforgeryToken />
+                <button type="submit" class="button">Request HKShop pickup</button>
+            </form>
+        }
+        @if (parcel.Stage == TransportStage.WaitingForShipper)
+        {
+            <p>HKShop is finding an available shipper within 10 km.</p>
+        }
+        @if (parcel.Stage == TransportStage.Assigned)
+        {
+            <p>Assigned to a HKShop shipper. Waiting for pickup acknowledgement.</p>
+        }
+        @if (parcel.Stage == TransportStage.Acknowledged)
+        {
+            <form class="form-stack" method="post" action="@Action("handoff")">
+                <AntiforgeryToken />
+                <label>Shipper pickup code <input name="code" maxlength="8" required /></label>
+                <button type="submit" class="button">Confirm parcel handoff</button>
+            </form>
+        }
+        @if (parcel.Issue.Length > 0)
+        {
+            <p class="message message-error">@parcel.Issue</p>
+        }
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public EOfficeSellerOrderDto Order { get; set; } = default!;
+
+    private string Action(string action) =>
+        $"/api/eoffice/transport/sellers/{Order.SellerId}/orders/{Order.Id:D}/{action}";
+}

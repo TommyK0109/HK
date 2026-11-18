@@ -1,0 +1,21 @@
+@inject IShopRequestContext Request
+
+<Router AppAssembly="typeof(Program).Assembly"
+        AdditionalAssemblies="new[] { typeof(HKShop.Commerce.CommerceAssemblyMarker).Assembly, typeof(HKShop.EOffice.EOfficeAssemblyMarker).Assembly }"
+        NotFoundPage="typeof(Pages.StatusPage)">
+    <Found Context="routeData">
+        <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(HKShop.Commerce.Ui.Layout.CommerceLayout)">
+            <NotAuthorized>
+                <section class="empty-state narrow" aria-labelledby="access-heading">
+                    <h1 id="access-heading">You do not have access</h1>
+                    <a class="button" href="@(IsEOffice ? "/eoffice/login" : "/account/login")">Sign in</a>
+                </section>
+            </NotAuthorized>
+        </AuthorizeRouteView>
+        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+    </Found>
+</Router>
+
+@code {
+    private bool IsEOffice => Request.Context.Request.Path.StartsWithSegments("/eoffice");
+}

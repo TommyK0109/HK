@@ -1,0 +1,182 @@
+@page "/seller/{SellerId:long}/settlement"
+@attribute [Authorize(Policy = ShopPolicies.CommerceSellerMfa)]
+@using HKShop.Application.Sellers
+@using HKShop.Application.Settlement
+@using HKShop.Domain.Settlement
+@inject PayoutService Payouts
+@inject IShopRequestContext Request
+
+<PageTitle>Statements and payouts · HKShop</PageTitle>
+@if (statement is null)
+{
+    <h1>You do not have access to this statement</h1>
+    <a href="/seller">My stores</a>
+}
+else
+{
+    <a class="back" href="@($"/seller/{SellerId}")">← Back to store</a>
+    <h1>Statements and payouts</h1>
+    <p class="muted">@statement.Seller.DisplayName</p>
+    <div class="metric-grid">
+        <div class="panel"><h2>Pending settlement</h2><strong>@ShopDisplay.Money(statement.PendingVnd)</strong></div>
+        <div class="panel"><h2>Available for payout</h2><strong>@ShopDisplay.Money(statement.AvailableVnd)</strong></div>
+        <div class="panel"><h2>Reserved for payout</h2><strong>@ShopDisplay.Money(statement.InTransitVnd)</strong></div>
+    </div>
+    @if (statement.AvailableVnd < 0)
+    {
+        <p class="message message-error top-space" role="status">Balance shortfall @ShopDisplay.Money(-statement.AvailableVnd). Future receipts will cover the shortfall.</p>
+    }
+    <section class="panel top-space">
+        <h2>Request a simulated payout</h2>
+        @if (statement.AvailableVnd > 0)
+        {
+            <form class="form-stack narrow" method="post" action="@($"/api/commerce/seller/{SellerId}/payouts")">
+                <AntiforgeryToken />
+                <input type="hidden" name="submissionKey" value="@submissionKey" />
+                <label>Amount (VND)
+                    <input type="number" name="amount" min="1" step="1" max="@ShopDisplay.Number(statement.AvailableVnd)" required />
+                </label>
+                <button type="submit" class="button">Submit payout request</button>
+            </form>
+        }
+        else
+        {
+            <p>No balance is available for payout.</p>
+        }
+    </section>
+    <section class="panel top-space">
+        <h2>Recent payout history</h2>
+        @if (statement.Payouts.Count == 0)
+        {
+            <p>No payout requests yet.</p>
+        }
+        else
+        {
+            @foreach (var payout in statement.Payouts)
+            {
+                <article class="editor" id="@($"payout-{payout.Id:D}")">
+                    <div class="heading-row">
+                        <h3>@ShopDisplay.Money(payout.AmountVnd)</h3>
+                        <span class="status">@ShopDisplay.Status(payout.Status)</span>
+                    </div>
+                    <p class="muted">Requested at @ShopDisplay.Date(payout.RequestedAt)</p>
+                    <p>Request ID <code>@payout.Id.ToString("D")</code></p>
+                    @if (payout.CompletedAt is { } completedAt)
+                    {
+                        <p>Completed at @ShopDisplay.Date(completedAt)</p>
+                    }
+                    @if (!string.IsNullOrEmpty(payout.ProviderReference))
+                    {
+                        <p>Simulated reference <code>@payout.ProviderReference</code></p>
+                    }
+                    @if (!string.IsNullOrEmpty(payout.ReviewNote))
+                    {
+                        <p>@payout.ReviewNote</p>
+                    }
+                    @if (!string.IsNullOrEmpty(payout.Issue))
+                    {
+                        <p>@payout.Issue</p>
+                    }
+                </article>
+            }
+        }
+    </section>
+    <section class="panel top-space">
+        <h2>Balance activity</h2>
+        @if (statement.Entries.Total == 0)
+        {
+            <p>No settlement entries yet.</p>
+        }
+        else
+        {
+            <div class="table-wrap"><table>
+                <thead><tr>
+                    <th scope="col">Time</th>
+                    <th scope="col">Transaction</th>
+                    <th scope="col">Account</th>
+                    <th scope="col">Amount</th>
+                    <th scope="col">Reference</th>
+                </tr></thead>
+                <tbody>
+                    @foreach (var entry in statement.Entries.Items)
+                    {
+                        <tr>
+                            <td>@ShopDisplay.Date(entry.OccurredAt)</td>
+                            <td>@EventLabel(entry.EventType)</td>
+                            <td>@AccountLabel(entry.AccountType)</td>
+                            <td>@(entry.AmountVnd > 0 ? "+" : "")@ShopDisplay.Money(entry.AmountVnd)</td>
+                            <td>
+                                @if (entry.SellerOrderNumber is not null)
+                                {
+                                    <span>@entry.SellerOrderNumber</span>
+                                }
+                                @if (entry.RefundId is { } refundId)
+                                {
+                                    <div>Refund #@refundId</div>
+                                }
+                                @if (entry.PayoutId is { } payoutId)
+                                {
+                                    if (statement.Payouts.Any(payout => payout.Id == payoutId))
+                                    {
+                                        <a href="@($"#payout-{payoutId:D}")">View payout request</a>
+                                    }
+                                    else
+                                    {
+                                        <code>@payoutId.ToString("D")</code>
+                                    }
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table></div>
+            <Pager Current="statement.Entries.Number" Last="statement.Entries.Last" Url="PageUrl" />
+        }
+    </section>
+}
+
+@code {
+    [Parameter] public long SellerId { get; set; }
+    [SupplyParameterFromQuery(Name = "page")] public int? Number { get; set; }
+    private SellerStatement? statement;
+    private Guid submissionKey;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        statement = null;
+        try
+        {
+            statement = await Payouts.Statement(await Request.Actor(), SellerId, Number ?? 1);
+            submissionKey = Guid.NewGuid();
+        }
+        catch (SellerAccessDeniedException)
+        {
+            if (!Request.Context.Response.HasStarted) Request.Context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        }
+    }
+
+    private string PageUrl(int page) => $"/seller/{SellerId}/settlement?page={page}";
+
+    private static string AccountLabel(LedgerAccountType account) => account switch
+    {
+        LedgerAccountType.SellerPending => "Pending settlement",
+        LedgerAccountType.SellerAvailable => "Available for payout",
+        LedgerAccountType.SellerPayoutInTransit => "Reserved for payout",
+        _ => account.ToString()
+    };
+
+    private static string EventLabel(LedgerEventType value) => value switch
+    {
+        LedgerEventType.Capture => "Collection",
+        LedgerEventType.Sale => "Sales revenue",
+        LedgerEventType.Commission => "Marketplace fee",
+        LedgerEventType.Refund => "Refund",
+        LedgerEventType.CommissionReversal => "Marketplace fee reversal",
+        LedgerEventType.SettlementRelease => "Settlement",
+        LedgerEventType.PayoutReserved => "Payout reserved",
+        LedgerEventType.PayoutSucceeded => "Paid out",
+        LedgerEventType.PayoutFailed => "Balance restored after payout failed",
+        LedgerEventType.PayoutRejected => "Balance restored after payout rejection",
+        _ => value.ToString()
+    };
+}

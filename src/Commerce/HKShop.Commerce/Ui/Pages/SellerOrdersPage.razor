@@ -1,0 +1,82 @@
+@page "/seller/{SellerId:long}/orders"
+@attribute [Authorize(Policy = ShopPolicies.CommerceSellerMfa)]
+@using HKShop.Application.Sellers
+@inject OrderService Orders
+@inject ReturnService Returns
+@inject IShopRequestContext Request
+
+<PageTitle>Orders and returns · HKShop</PageTitle>
+<a class="back" href="@($"/seller/{SellerId}")">← Back to store</a>
+@if (page is null)
+{
+    <h1>You do not have permission to fulfill orders for this store</h1>
+}
+else
+{
+    <div class="heading-row">
+        <h1>Orders and returns</h1>
+        <a class="button secondary" href="@($"/seller/{SellerId}/transport")">Manage pickup location</a>
+    </div>
+    @if (queue.Count > 0)
+    {
+        <section class="panel">
+            <h2>Returns awaiting action</h2>
+            <ul class="clean-list">
+                @foreach (var row in queue)
+                {
+                    <li>
+                        <a href="@($"{OrderPath(row.SellerOrderId)}#return-{row.Id}")">@row.Reason</a>
+                        <span>@ShopDisplay.Status(row.Status) · @ShopDisplay.Date(row.RequestedAt)</span>
+                    </li>
+                }
+            </ul>
+        </section>
+    }
+    <section class="panel top-space">
+        <h2>Store orders</h2>
+        @if (page.Items.Count == 0)
+        {
+            <p>No orders yet.</p>
+        }
+        else
+        {
+            <ul class="clean-list">
+                @foreach (var row in page.Items)
+                {
+                    <li>
+                        <a href="@OrderPath(row.SellerOrder.Id)">@row.SellerOrder.Number</a>
+                        <small>@ShopDisplay.Date(row.SellerOrder.CreatedAt) · @ShopDisplay.Money(row.SellerOrder.TotalVnd)</small>
+                        <span class="status">@ShopDisplay.Status(row.SellerOrder.Status)</span>
+                    </li>
+                }
+            </ul>
+            <Pager Current="page.Number" Last="page.Last" Url="PageUrl" />
+        }
+    </section>
+}
+
+@code {
+    [Parameter] public long SellerId { get; set; }
+    [SupplyParameterFromQuery(Name = "page")] public int? Number { get; set; }
+    private Page<SellerOrderListRow>? page;
+    private List<ReturnRequest> queue = [];
+
+    protected override async Task OnParametersSetAsync()
+    {
+        page = null;
+        queue = [];
+        var actor = await Request.Actor();
+        try
+        {
+            queue = await Returns.Queue(actor, SellerId);
+            page = await Orders.SellerOrders(actor, SellerId, null, Number ?? 1);
+        }
+        catch (SellerAccessDeniedException)
+        {
+            Request.Context.Response.StatusCode = 403;
+        }
+    }
+
+    private string OrderPath(Guid id) => $"/seller/{SellerId}/orders/{id:D}";
+    private string PageUrl(int number) => $"/seller/{SellerId}/orders?page={number}";
+}
