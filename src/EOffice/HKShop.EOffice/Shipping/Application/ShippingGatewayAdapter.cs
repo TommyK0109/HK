@@ -9,7 +9,7 @@ namespace HKShop.EOffice.Shipping.Application;
 public sealed class ShippingGatewayAdapter(
     TransportService transport,
     TransportSettings settings,
-    ITransportRouting routing) : IShippingGateway, IShippingAdminPort
+    ITransportRouting routing) : IShippingGateway, IShippingAdminPort, IShippingShipperPort
 {
     public bool Enabled => settings.Enabled;
 
@@ -120,8 +120,8 @@ public sealed class ShippingGatewayAdapter(
         await TransportService.EndAssignment(db, parcel, now, "Returned");
     }
 
-    public async Task ConfigureShipperAsync(ShopActor actor, string userId, string email, bool active) =>
-        await transport.ConfigureShipper(actor, userId, email, active);
+    public Task ConfigureShipperAsync(IShopSession db, ShopActor actor, string userId, string email, bool active) =>
+        transport.ConfigureShipper(db, actor, userId, email, active);
 
     public async Task ReassignAsync(ShopActor actor, Guid sellerOrderId) =>
         await transport.Reassign(actor, sellerOrderId);
@@ -164,4 +164,39 @@ public sealed class ShippingGatewayAdapter(
 
     public async Task ResolveBankReceiptAsync(ShopActor actor, string transactionId, string? reference, string? resolution) =>
         await transport.ResolveBankReceipt(actor, transactionId, reference, resolution);
+
+    public async Task<ShipperStateDto> ShipperStateAsync(ShopActor actor, CancellationToken cancellationToken = default)
+    {
+        var (onDuty, job, assignmentId) = await transport.ShipperJob(actor);
+        var remittances = await transport.ShipperRemittances(actor);
+        return new ShipperStateDto(
+            onDuty,
+            job is null ? null : MapJob(job),
+            assignmentId,
+            remittances.Select(MapJob).ToList());
+    }
+
+    public async Task UpdatePresenceAsync(ShopActor actor, bool onDuty, double? latitude, double? longitude, CancellationToken cancellationToken = default) =>
+        await transport.UpdatePresence(actor, onDuty, latitude, longitude);
+
+    public async Task RespondAsync(ShopActor actor, Guid sellerOrderId, Guid assignmentId, bool accept, CancellationToken cancellationToken = default) =>
+        await transport.Respond(actor, sellerOrderId, assignmentId, accept);
+
+    public Task<bool> DeliverAsync(ShopActor actor, Guid sellerOrderId, string code, DoorPayment? method, decimal? cash, CancellationToken cancellationToken = default) =>
+        transport.Deliver(actor, sellerOrderId, code, method, cash);
+
+    public async Task ReturnToSenderAsync(ShopActor actor, Guid sellerOrderId, string issue, CancellationToken cancellationToken = default) =>
+        await transport.ReturnToSender(actor, sellerOrderId, issue);
+
+    private static TransportJobDto MapJob(TransportJob j) => new(
+        j.Parcel.ToSummary(redactDeliveryCode: true),
+        j.OrderId,
+        j.Number,
+        j.Recipient,
+        j.Phone,
+        j.Destination,
+        j.Method,
+        j.TotalVnd,
+        j.ShippingVnd,
+        j.ShipperEmail);
 }

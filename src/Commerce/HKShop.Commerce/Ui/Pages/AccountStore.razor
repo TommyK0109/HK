@@ -1,0 +1,90 @@
+@page "/account/store"
+@attribute [Authorize(Policy = ShopPolicies.CommerceCustomer)]
+@inject StoreApplications Applications
+@inject IShopRequestContext Request
+
+<PageTitle>Register a store · HKShop</PageTitle>
+<a class="back" href="/account/profile">← Account settings</a>
+<h1>Register a store</h1>
+
+@if (!verified)
+{
+    <p>Confirm your email address before applying to open a store.</p>
+    <a href="/account/resend">Resend confirmation email</a>
+}
+else
+{
+    @if (history.Count > 0)
+    {
+        <section class="panel">
+            <h2>Your applications</h2>
+            <ul class="clean-list">
+                @foreach (var application in history)
+                {
+                    <li>
+                        <div>
+                            <strong>@application.StoreName</strong> · @application.Status
+                            <div class="muted">Submitted @ShopDisplay.Date(application.SubmittedAt)</div>
+                            @if (application.Status != StoreApplicationStatus.Pending && application.ReadAt is null)
+                            {
+                                <p role="status">New decision</p>
+                                <form method="post" action="@($"/api/commerce/seller/applications/{application.Id:D}/read")">
+                                    <AntiforgeryToken />
+                                    <button class="text-button" type="submit">Mark as read</button>
+                                </form>
+                            }
+                            @if (application.DeclineReason is not null)
+                            {
+                                <p>@application.DeclineReason</p>
+                            }
+                            @if (application.SellerId is long sellerId)
+                            {
+                                <a href="@($"/seller/{sellerId}")">Open store workspace</a>
+                            }
+                        </div>
+                    </li>
+                }
+            </ul>
+        </section>
+    }
+    <section class="panel top-space">
+        <form class="form-stack" method="post" enctype="multipart/form-data" action="/api/commerce/seller/applications">
+            <AntiforgeryToken />
+            <input type="hidden" name="id" value="@applicationId" />
+            <label>Store name <input name="storeName" maxlength="100" autocomplete="organization" required /></label>
+            <fieldset data-repeat>
+                <legend>Product summary</legend>
+                <p>Enter product names and prices, or upload a CSV up to 5 MB with the headers <code>product_name,price_vnd</code>.</p>
+                <div data-repeat-row class="form-grid">
+                    <label>Product name <input name="productNames" maxlength="150" /></label>
+                    <label>Price (VND) <input name="prices" type="number" min="1" step="1" /></label>
+                </div>
+                <button type="button" class="text-button" data-repeat-add>Add another product</button>
+                <label>Product CSV <input name="productsCsv" type="file" accept=".csv,text/csv" /></label>
+            </fieldset>
+            <fieldset class="form-stack">
+                <legend>Store verification</legend>
+                <label>National ID number <input name="nationalId" maxlength="64" autocomplete="off" required /></label>
+                <label>National ID front <input name="nationalIdFront" type="file" accept="image/jpeg,image/png" required /></label>
+                <label>National ID back <input name="nationalIdBack" type="file" accept="image/jpeg,image/png" required /></label>
+                <label>Business license number <input name="businessLicenseNumber" maxlength="64" autocomplete="off" required /></label>
+                <label>Business license copy <input name="businessLicense" type="file" accept="image/jpeg,image/png,application/pdf" required /></label>
+                <p class="muted">Each verification file can be up to 5 MB.</p>
+            </fieldset>
+            <button type="submit" class="button">Send application</button>
+        </form>
+    </section>
+}
+
+@code {
+    private readonly Guid applicationId = Guid.NewGuid();
+    private IReadOnlyList<StoreApplicationSummary> history = [];
+    private bool verified;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var actor = await Request.Actor();
+        verified = actor.Verified;
+        if (verified) history = await Applications.Mine(actor);
+    }
+}

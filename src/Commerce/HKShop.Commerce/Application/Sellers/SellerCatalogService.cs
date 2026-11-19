@@ -7,6 +7,7 @@ using HKShop.Domain.Sellers;
 namespace HKShop.Application.Sellers;
 
 public sealed record SellerCatalogVariant(long Id, string Product, string Code, string Size, string Color);
+public sealed record SellerProductVariant(string Code, string? Size, string? Color, decimal Price, int Quantity);
 public sealed record SellerOfferRow(long Id, string Code, string Product, string Variant, decimal? PriceVnd,
     SellerOfferStatus Status, int OnHand, int Reserved)
 {
@@ -30,7 +31,7 @@ public sealed class SellerCatalogService(IShopStore store, TimeProvider time)
         var categories = await db.List(db.Query<Category>().Where(c => c.Active).OrderBy(c => c.Name));
         var listed = db.Query<SellerOffer>().Where(o => o.SellerId == sellerId);
         var variants = await db.List((
-            from sku in ApprovedVariants(db)
+            from sku in ApprovedVariants(db, sellerId)
             join product in db.Query<Product>() on sku.ProductId equals product.Id
             where !listed.Any(o => o.SkuId == sku.Id) &&
                 (search == "" || sku.Code.Contains(search) || product.Name.Contains(search))
@@ -58,43 +59,89 @@ public sealed class SellerCatalogService(IShopStore store, TimeProvider time)
             ValidatePrice(price);
             if (initialQuantity < 0)
                 throw new ShopRuleException("Initial stock quantity cannot be negative.");
-            if (await db.First(ApprovedVariants(db).Where(s => s.Id == skuId)) is null)
+            if (await db.First(ApprovedVariants(db, sellerId).Where(s => s.Id == skuId)) is null)
                 throw new ShopRuleException("This variant is not available for listing.");
             if (await db.First(db.Query<SellerOffer>().Where(o => o.SellerId == sellerId && o.SkuId == skuId)) is not null)
                 throw new ShopRuleException("This store already has an offer for this variant.");
             await RequireUniqueCode(db, sellerId, code, 0);
 
-            var location = await db.First(db.Query<SellerLocation>().Where(l => l.SellerId == sellerId && l.Active));
-            if (location is null)
-            {
-                location = new SellerLocation { SellerId = sellerId, Name = "Main warehouse", Active = true };
-                db.Add(location);
-            }
-            var offer = new SellerOffer
-            {
-                SellerId = sellerId, SkuId = skuId, SellerSkuCode = code, PriceVnd = price, Status = SellerOfferStatus.Pending
-            };
-            db.Add(offer);
-            await db.Save();
-            var now = time.GetUtcNow();
-            var balance = new InventoryBalance { SellerId = sellerId, OfferId = offer.Id, LocationId = location.Id, OnHand = initialQuantity };
-            db.Add(balance);
-            if (initialQuantity > 0)
-            {
-                await db.Save();
-                db.Add(new OfferStockMovement
-                {
-                    InventoryBalanceId = balance.Id,
-                    OnHandDelta = initialQuantity,
-                    ReservedDelta = 0,
-                    Reason = "Initial offer stock",
-                    ActorId = actor.UserId,
-                    OccurredAt = now
-                });
-            }
-            db.Audit(actor.UserId, "Gửi duyệt chào bán", Key(offer.Id), now, sellerId: sellerId);
-            return offer.Id;
+            var location = await OfferLocation(db, sellerId);
+            return await AddPendingOffer(db, location, skuId, code, price, initialQuantity, actor.UserId, time.GetUtcNow());
         });
+
+    public async Task<int> SubmitProduct(ShopActor actor, long sellerId, string name, string? description, long categoryId,
+        IReadOnlyList<SellerProductVariant> variants, IReadOnlyList<Func<Stream>> photos, IProductImageStore media)
+    {
+        name = ShopRules.Text(name, 150, "Product name");
+        description = ShopRules.Text(description, 4000, "Description", required: false);
+        if (variants.Count is < 1 or > 50 || photos.Count is < 1 or > 4)
+            throw new ShopRuleException("Add 1 to 50 variants and 1 to 4 product photos.");
+
+        var rows = variants.Select(row =>
+        {
+            ValidatePrice(row.Price);
+            if (row.Quantity < 0) throw new ShopRuleException("Initial stock cannot be negative.");
+            return row with
+            {
+                Code = NormalizeCode(row.Code),
+                Size = ShopRules.Text(row.Size, 40, "Size", required: false),
+                Color = ShopRules.Text(row.Color, 40, "Color", required: false)
+            };
+        }).ToList();
+        if (rows.Select(row => row.Code).Distinct(StringComparer.OrdinalIgnoreCase).Count() != rows.Count)
+            throw new ShopRuleException("Each variant needs a different offer code.");
+
+        await store.Read(db => RequireManagedSeller(db, actor, sellerId));
+        var imageNames = new List<string>();
+        try
+        {
+            foreach (var openPhoto in photos)
+            {
+                await using var photo = openPhoto();
+                imageNames.Add(await media.Save(photo));
+            }
+            return await store.Write(async db =>
+            {
+                await RequireManagedSeller(db, actor, sellerId);
+                if (!await CatalogService.HasActiveCategory(db, categoryId))
+                    throw new ShopRuleException("The category is no longer active.");
+                var codes = rows.Select(row => row.Code).ToArray();
+                if (await db.First(db.Query<SellerOffer>().Where(offer =>
+                    offer.SellerId == sellerId && codes.Contains(offer.SellerSkuCode))) is not null)
+                    throw new ShopRuleException("An offer code is already in use by the store.");
+
+                var product = new Product
+                {
+                    SellerId = sellerId, Name = name, Description = description, CategoryId = categoryId,
+                    Slug = $"product-{Guid.NewGuid():N}",
+                    Images = imageNames.Select(file => new ProductImage { FileName = file, Alt = name }).ToList(),
+                    Skus = rows.Select(row => new Sku
+                    {
+                        Code = $"SKU-{Guid.NewGuid():N}", Size = row.Size ?? "", Color = row.Color ?? "", Active = true
+                    }).ToList()
+                };
+                db.Add(product);
+                var location = await OfferLocation(db, sellerId);
+                await db.Save();
+                var now = time.GetUtcNow();
+                for (var index = 0; index < rows.Count; index++)
+                {
+                    var row = rows[index];
+                    await AddPendingOffer(db, location, product.Skus[index].Id, row.Code, row.Price, row.Quantity, actor.UserId, now);
+                }
+                return product.Id;
+            });
+        }
+        catch
+        {
+            foreach (var file in imageNames)
+            {
+                try { await media.Delete(file); }
+                catch { /* Best-effort cleanup after failed submission. */ }
+            }
+            throw;
+        }
+    }
 
     public Task<bool> UpdateOffer(ShopActor actor, long sellerId, long offerId, string code, decimal price) =>
         store.Write(async db =>
@@ -107,7 +154,7 @@ public sealed class SellerCatalogService(IShopStore store, TimeProvider time)
             var resubmit = offer.Status is SellerOfferStatus.Rejected or SellerOfferStatus.Archived;
             if (resubmit)
             {
-                if (await db.First(ApprovedVariants(db).Where(s => s.Id == offer.SkuId)) is null)
+                if (await db.First(OwnedVariants(db, sellerId).Where(s => s.Id == offer.SkuId && s.Active)) is null)
                     throw new ShopRuleException("This variant is not available for listing.");
                 offer.Status = SellerOfferStatus.Pending;
             }
@@ -196,10 +243,11 @@ public sealed class SellerCatalogService(IShopStore store, TimeProvider time)
                          join seller in db.Query<Seller>() on offer.SellerId equals seller.Id
                          join sku in db.Query<Sku>() on offer.SkuId equals sku.Id
                          join product in db.Query<Product>() on sku.ProductId equals product.Id
-                         where offer.SellerId != Seller.FirstPartyId && offer.Status == SellerOfferStatus.Pending
+                         where offer.SellerId != Seller.FirstPartyId && offer.Status == SellerOfferStatus.Pending &&
+                               product.SellerId == offer.SellerId && seller.Status == SellerStatus.Active
                          orderby offer.Id
                          select new OfferReviewRow(offer.Id, seller.DisplayName, product.Name, sku.Code,
-                             offer.SellerSkuCode, offer.PriceVnd);
+                             offer.SellerSkuCode, offer.PriceVnd, product.Id);
             var proposals = from proposal in db.Query<ProductProposal>()
                             join seller in db.Query<Seller>() on proposal.SellerId equals seller.Id
                             join category in db.Query<Category>() on proposal.CategoryId equals category.Id
@@ -222,8 +270,18 @@ public sealed class SellerCatalogService(IShopStore store, TimeProvider time)
             if (approve)
             {
                 await RequireActiveSeller(db, offer.SellerId);
-                if (offer.PriceVnd is null or <= 0 || await db.First(ApprovedVariants(db).Where(s => s.Id == offer.SkuId)) is null)
-                    throw new ShopRuleException("The offer requires a price and a published variant.");
+                var sku = await db.First(OwnedVariants(db, offer.SellerId).Where(s => s.Id == offer.SkuId && s.Active));
+                if (offer.PriceVnd is null or <= 0 || sku is null)
+                    throw new ShopRuleException("The offer requires a price and an active variant owned by the store.");
+                var product = (await db.First(db.Query<Product>().Where(p => p.Id == sku.ProductId)))!;
+                var categoryActive = await CatalogService.HasActiveCategory(db, product.CategoryId);
+                if (product.Status == ProductStatus.Draft)
+                {
+                    await db.List(db.Query<ProductImage>().Where(i => i.ProductId == product.Id));
+                    product.Publish(categoryActive);
+                }
+                else if (product.Status != ProductStatus.Published || !categoryActive)
+                    throw new ShopRuleException("The product must be published in an active category.");
             }
             offer.Status = approve ? SellerOfferStatus.Approved : SellerOfferStatus.Rejected;
             db.Audit(actor.UserId, approve ? "Duyệt chào bán" : "Từ chối chào bán", Key(offer.Id),
@@ -246,7 +304,8 @@ public sealed class SellerCatalogService(IShopStore store, TimeProvider time)
                 await RequireNewProduct(db, proposal.Slug, proposal.CategoryId);
                 var product = new Product
                 {
-                    Name = proposal.Name, Slug = proposal.Slug, Description = proposal.Description, CategoryId = proposal.CategoryId
+                    SellerId = proposal.SellerId, Name = proposal.Name, Slug = proposal.Slug,
+                    Description = proposal.Description, CategoryId = proposal.CategoryId
                 };
                 db.Add(product);
                 await db.Save();
@@ -259,11 +318,17 @@ public sealed class SellerCatalogService(IShopStore store, TimeProvider time)
         });
     }
 
-    private static IQueryable<Sku> ApprovedVariants(IShopSession db) =>
-        from sku in db.Query<Sku>()
+    private static IQueryable<Sku> ApprovedVariants(IShopSession db, long sellerId) =>
+        from sku in OwnedVariants(db, sellerId)
         join product in db.Query<Product>() on sku.ProductId equals product.Id
         join category in db.Query<Category>() on product.CategoryId equals (long?)category.Id
         where sku.Active && product.Status == ProductStatus.Published && category.Active
+        select sku;
+
+    private static IQueryable<Sku> OwnedVariants(IShopSession db, long sellerId) =>
+        from sku in db.Query<Sku>()
+        join product in db.Query<Product>() on sku.ProductId equals product.Id
+        where product.SellerId == sellerId
         select sku;
 
     private static IQueryable<SellerOfferRow> OfferRows(IShopSession db, long sellerId, long? offerId = null) =>
@@ -273,13 +338,16 @@ public sealed class SellerCatalogService(IShopStore store, TimeProvider time)
         join balance in db.Query<InventoryBalance>() on new { offer.SellerId, OfferId = offer.Id }
             equals new { balance.SellerId, balance.OfferId }
         join location in db.Query<SellerLocation>() on balance.LocationId equals location.Id
-        where offer.SellerId == sellerId && location.Active && (offerId == null || offer.Id == offerId)
+        where offer.SellerId == sellerId && product.SellerId == sellerId && location.Active && (offerId == null || offer.Id == offerId)
         orderby offer.Id descending
         select new SellerOfferRow(offer.Id, offer.SellerSkuCode, product.Name, sku.Code, offer.PriceVnd,
             offer.Status, balance.OnHand, balance.Reserved);
 
     private static async Task<SellerOffer> FindOffer(IShopSession db, long sellerId, long offerId) =>
-        await db.First(db.Query<SellerOffer>().Where(o => o.SellerId == sellerId && o.Id == offerId))
+        await db.First(from offer in db.Query<SellerOffer>()
+                       join sku in OwnedVariants(db, sellerId) on offer.SkuId equals sku.Id
+                       where offer.SellerId == sellerId && offer.Id == offerId
+                       select offer)
             ?? throw new SellerAccessDeniedException();
 
     private static async Task<SellerWorkspace> RequireManagedSeller(IShopSession db, ShopActor actor, long sellerId)
@@ -294,11 +362,44 @@ public sealed class SellerCatalogService(IShopStore store, TimeProvider time)
             is not null) throw new ShopRuleException("This offer code is already in use by the store.");
     }
 
+    private static async Task<SellerLocation> OfferLocation(IShopSession db, long sellerId)
+    {
+        var location = await db.First(db.Query<SellerLocation>().Where(l => l.SellerId == sellerId && l.Active));
+        if (location is not null) return location;
+        location = new SellerLocation { SellerId = sellerId, Name = "Main warehouse", Active = true };
+        db.Add(location);
+        return location;
+    }
+
+    private static async Task<long> AddPendingOffer(IShopSession db, SellerLocation location, long skuId, string code,
+        decimal price, int quantity, string actorId, DateTimeOffset now)
+    {
+        var offer = new SellerOffer
+        {
+            SellerId = location.SellerId, SkuId = skuId, SellerSkuCode = code, PriceVnd = price, Status = SellerOfferStatus.Pending
+        };
+        db.Add(offer);
+        await db.Save();
+        var balance = new InventoryBalance { SellerId = location.SellerId, OfferId = offer.Id, LocationId = location.Id, OnHand = quantity };
+        db.Add(balance);
+        if (quantity > 0)
+        {
+            await db.Save();
+            db.Add(new OfferStockMovement
+            {
+                InventoryBalanceId = balance.Id, OnHandDelta = quantity, Reason = "Initial offer stock",
+                ActorId = actorId, OccurredAt = now
+            });
+        }
+        db.Audit(actorId, "Gửi duyệt chào bán", Key(offer.Id), now, sellerId: location.SellerId);
+        return offer.Id;
+    }
+
     private static async Task RequireNewProduct(IShopSession db, string slug, long categoryId)
     {
         if (!await CatalogService.HasActiveCategory(db, categoryId)) throw new ShopRuleException("The category is no longer active.");
         if (await db.First(db.Query<Product>().Where(p => p.Slug == slug)) is not null)
-            throw new ShopRuleException("The product slug already exists. Choose a variant from the shared catalog if the product is already listed.");
+            throw new ShopRuleException("The product slug already exists. Choose a different slug.");
     }
 
     private static async Task RequireActiveSeller(IShopSession db, long sellerId)

@@ -320,13 +320,11 @@ public sealed class ShippingCommerceCallbackAdapter : IShippingCommerceCallbackP
         db.Audit(actorId, "Transport shipper payout reconciled", sellerOrderId.ToString(), now, reference);
     }
 
-    public async Task<bool> HasCustomerOrSellerActivityAsync(IShopSession db, string userId)
+    public async Task RequireShipperEligibilityAsync(IShopSession db, string userId)
     {
-        if (await db.Count(db.Query<SellerMembership>().Where(m => m.UserId == userId && m.Status == SellerMembershipStatus.Active)) > 0)
-            return true;
-        if (await db.Count(db.Query<Order>().Where(o => o.CustomerId == userId)) > 0)
-            return true;
-        return false;
+        if (await db.Count(db.Query<SellerMembership>().Where(m => m.UserId == userId && m.Status == SellerMembershipStatus.Active)) > 0 ||
+            await db.Count(db.Query<Order>().Where(o => o.CustomerId == userId)) > 0)
+            throw new ShopRuleException("An account with an active seller membership or customer orders cannot become a shipper.");
     }
 
     private static Task PostRetainedFee(IShopSession db, SellerOrder child, DateTimeOffset now) =>

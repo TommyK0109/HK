@@ -20,6 +20,7 @@
             <details class="editor">
                 <summary>@offer.Product · @offer.Seller</summary>
                 <p>Variant @offer.Variant · Offer code @offer.Code · @ShopDisplay.Money(offer.PriceVnd ?? 0)</p>
+                <p><a href="@($"/eoffice/products/{offer.ProductId}")">Review product details and photos</a></p>
                 <form class="heading-row" method="post" action="@($"/api/eoffice/marketplace/offers/{offer.Id}")">
                     <AntiforgeryToken />
                     <button class="button" type="submit" name="decision" value="approve">Approve offer</button>

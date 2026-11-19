@@ -26,23 +26,25 @@ public sealed class SqlSellerTests
         try
         {
             await context.Database.MigrateAsync();
-            var service = new SellerService(new SqlShopStore(factory), TimeProvider.System);
+            var store = new SqlShopStore(factory);
+            var service = new SellerService(store, TimeProvider.System);
+            var applications = StoreApplicationFixture.Service(store, TimeProvider.System);
             var admin = await User(context, "admin", admin: true);
             var ownerA = await User(context, "owner-a");
             var ownerB = await User(context, "owner-b");
             var shared = await User(context, "both-sellers");
-            await Assert.ThrowsAsync<ShopRuleException>(() => service.Register(ownerA with { Verified = false }, "Seller A", "seller-a"));
-            var sellerA = await service.Register(ownerA, "Seller A", "seller-a");
-            var sellerB = await service.Register(ownerB, "Seller B", "seller-b");
+            await Assert.ThrowsAsync<ShopRuleException>(() => StoreApplicationFixture.Submit(applications, ownerA with { Verified = false }, "Seller A"));
+            var applicationA = await StoreApplicationFixture.Submit(applications, ownerA, "Seller A");
+            var applicationB = await StoreApplicationFixture.Submit(applications, ownerB, "Seller B");
 
-            Assert.Equal(SellerStatus.Pending, Assert.Single(await service.Mine(ownerA)).Status);
+            Assert.Empty(await service.Mine(ownerA));
             await Assert.ThrowsAsync<SellerAccessDeniedException>(() => service.Mine(ownerA with { Mfa = false }));
-            Assert.False((await service.Workspace(ownerA, sellerA)).Allows(SellerPermission.ManageTeam));
-            await Assert.ThrowsAsync<SellerAccessDeniedException>(() => service.Team(ownerA, sellerA));
-            await Assert.ThrowsAsync<ShopRuleException>(() => service.SetStatus(ownerA, sellerA, SellerStatus.Active, null));
+            await Assert.ThrowsAsync<ShopRuleException>(() => applications.Decide(ownerA, applicationA, true, null));
+            await applications.Decide(admin, applicationA, true, null);
+            await applications.Decide(admin, applicationB, true, null);
+            var sellerA = (await applications.Details(admin, applicationA))!.Summary.SellerId!.Value;
+            var sellerB = (await applications.Details(admin, applicationB))!.Summary.SellerId!.Value;
             Assert.Contains((await service.PlatformList(admin, 1)).Items, seller => seller.Id == sellerA);
-            await service.SetStatus(admin, sellerA, SellerStatus.Active, null);
-            await service.SetStatus(admin, sellerB, SellerStatus.Active, null);
 
             Assert.Equal(SellerRole.Owner, (await service.Workspace(ownerA, sellerA)).Role);
             await Assert.ThrowsAsync<SellerAccessDeniedException>(() => service.Workspace(ownerA with { Mfa = false }, sellerA));
@@ -95,8 +97,8 @@ public sealed class SqlSellerTests
             var owner = await User(context, "owner");
             var invitee = await User(context, "invitee");
             var another = await User(context, "another");
-            var seller = await ActiveSeller(service, admin, owner, "invite-test");
-            var anotherSeller = await ActiveSeller(service, admin, another, "other-seller");
+            var seller = await StoreApplicationFixture.Open(new SqlShopStore(factory), clock, admin, owner, "Invite test");
+            var anotherSeller = await StoreApplicationFixture.Open(new SqlShopStore(factory), clock, admin, another, "Other seller");
 
             await service.Invite(owner, seller, invitee.Email, SellerRole.Finance, Origin);
             var token = await InviteToken(context, invitee.Email);
@@ -151,8 +153,8 @@ public sealed class SqlSellerTests
             var ownerA = await User(context, "owner-a");
             var ownerB = await User(context, "owner-b");
             var financeA = await User(context, "finance-a");
-            var sellerA = await ActiveSeller(service, admin, ownerA, "report-a");
-            var sellerB = await ActiveSeller(service, admin, ownerB, "report-b");
+            var sellerA = await StoreApplicationFixture.Open(store, clock, admin, ownerA, "Report A");
+            var sellerB = await StoreApplicationFixture.Open(store, clock, admin, ownerB, "Report B");
             await service.Invite(ownerA, sellerA, financeA.Email, SellerRole.Finance, Origin);
             await service.Accept(financeA, await InviteToken(context, financeA.Email));
 
@@ -225,7 +227,8 @@ public sealed class SqlSellerTests
             var sku = new Sku { Code = "LEGACY-ONE", Active = true, PriceVnd = 1_000m };
             sku.Stock.Adjust(1);
             sku.Stock.Reserve(1);
-            context.Add(new Product { Name = "Legacy product", Slug = "legacy-product", Skus = [sku] });
+            sku.ProductId = await SqlTestDatabase.InsertLegacyProduct(context, "Legacy product", "legacy-product");
+            context.Add(sku);
             await context.SaveChangesAsync();
             await context.Database.ExecuteSqlInterpolatedAsync($"""
                 INSERT dbo.Orders (Id, Number, CustomerId, CustomerEmail, SubmissionKey, CreatedAt,
@@ -264,13 +267,6 @@ public sealed class SqlSellerTests
             Assert.Equal(4, await context.Set<AuditEntry>().CountAsync(row => row.SellerId == Seller.FirstPartyId && row.Target == "LEGACY-ORDER"));
         }
         finally { await context.Database.EnsureDeletedAsync(); }
-    }
-
-    private static async Task<long> ActiveSeller(SellerService service, ShopActor admin, ShopActor owner, string slug)
-    {
-        var id = await service.Register(owner, slug, slug);
-        await service.SetStatus(admin, id, SellerStatus.Active, null);
-        return id;
     }
 
     private static async Task<ShopActor> User(ShopDbContext context, string name, bool admin = false, bool staff = false)

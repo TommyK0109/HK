@@ -82,42 +82,37 @@ public sealed class SqlCommerceTests
             context.AddRange(category, customer, otherCustomer);
             await context.SaveChangesAsync();
 
-            var product = new Product
-            {
-                CategoryId = category.Id, Name = "Sản phẩm thử", Slug = "review-product",
-                Images = [new ProductImage { FileName = "test.webp" }],
-                Skus = [new Sku { Code = "REVIEW-SKU", Active = true, PriceVnd = 1_000 }]
-            };
-            context.Add(product);
+            const string slug = "review-product";
+            var productId = await SqlTestDatabase.InsertLegacyProduct(context, "Sản phẩm thử", slug, category.Id);
+            context.Add(new ProductImage { ProductId = productId, FileName = "test.webp" });
+            context.Add(new Sku { ProductId = productId, Code = "REVIEW-SKU", Active = true, PriceVnd = 1_000 });
             await context.SaveChangesAsync();
 
             var catalog = new CatalogService(new SqlShopStore(factory), new UnusedImageStore(), TimeProvider.System);
             var actor = new ShopActor(customer.Id, "", true, false, false);
-            await Assert.ThrowsAsync<ShopRuleException>(() => catalog.SubmitReview(actor, product.Slug, "Nội dung", 5));
-            product.Publish(category.Active);
-            await context.SaveChangesAsync();
-
             var originalDate = DateTimeOffset.UtcNow.AddDays(-1);
             await context.Database.ExecuteSqlInterpolatedAsync($"""
                 INSERT dbo.ProductReviews (ProductId, CustomerId, Content, Rating, CreatedAt)
-                VALUES ({product.Id}, {customer.Id}, N'Đánh giá cũ', 4, {originalDate});
+                VALUES ({productId}, {customer.Id}, N'Đánh giá cũ', 4, {originalDate});
                 """);
             await context.Database.MigrateAsync();
-            var original = Assert.Single((await catalog.Reviews(product.Id, actor.UserId)).Items);
+            await Assert.ThrowsAsync<ShopRuleException>(() => catalog.SubmitReview(actor, slug, "Nội dung", 5));
+            await context.Database.ExecuteSqlInterpolatedAsync($"UPDATE dbo.Products SET Status = 1 WHERE Id = {productId}");
+            var original = Assert.Single((await catalog.Reviews(productId, actor.UserId)).Items);
             Assert.Equal((4, "Đánh giá cũ", originalDate), (original.Rating, original.Content, original.CreatedAt));
             Assert.Null(original.UpdatedAt);
             Assert.True(original.CanEdit);
 
-            await Assert.ThrowsAsync<ShopRuleException>(() => catalog.SubmitReview(actor with { Verified = false }, product.Slug, "Nội dung", 5));
-            Assert.Equal(product.Slug, await catalog.SubmitReview(actor, product.Slug, "  Sản phẩm tốt  ", 5));
+            await Assert.ThrowsAsync<ShopRuleException>(() => catalog.SubmitReview(actor with { Verified = false }, slug, "Nội dung", 5));
+            Assert.Equal(slug, await catalog.SubmitReview(actor, slug, "  Sản phẩm tốt  ", 5));
             var otherActor = actor with { UserId = otherCustomer.Id };
-            var otherView = await catalog.Reviews(product.Id, otherActor.UserId);
+            var otherView = await catalog.Reviews(productId, otherActor.UserId);
             Assert.Equal(2, otherView.Total);
             Assert.All(otherView.Items, review => Assert.False(review.CanEdit));
-            await Assert.ThrowsAsync<ShopRuleException>(() => catalog.EditReview(otherActor, product.Slug, original.Id, "Không hợp lệ", 1));
-            Assert.Equal(product.Slug, await catalog.EditReview(actor, product.Slug, original.Id, "  Đã cập nhật  ", 3));
+            await Assert.ThrowsAsync<ShopRuleException>(() => catalog.EditReview(otherActor, slug, original.Id, "Không hợp lệ", 1));
+            Assert.Equal(slug, await catalog.EditReview(actor, slug, original.Id, "  Đã cập nhật  ", 3));
 
-            var visitor = await catalog.Reviews(product.Id, null);
+            var visitor = await catalog.Reviews(productId, null);
             Assert.Collection(visitor.Items,
                 latest =>
                 {
@@ -145,6 +140,15 @@ public sealed class SqlCommerceTests
 internal sealed class SqlTestDatabase(DbContextOptions<ShopDbContext> options) : IDbContextFactory<ShopDbContext>
 {
     public ShopDbContext CreateDbContext() => new(options);
+
+    public static async Task<int> InsertLegacyProduct(ShopDbContext db, string name, string slug, long? categoryId = null)
+    {
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT dbo.Products (Name, Slug, Description, CategoryId, Status)
+            VALUES ({name}, {slug}, N'', {categoryId}, 0);
+            """);
+        return await db.Database.SqlQuery<int>($"SELECT Id AS Value FROM dbo.Products WHERE Slug = {slug}").SingleAsync();
+    }
 
     public static SqlTestDatabase Create()
     {

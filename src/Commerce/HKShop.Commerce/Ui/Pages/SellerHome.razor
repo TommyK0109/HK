@@ -43,15 +43,7 @@ else
         }
         <section class="panel">
             <h2>Register a store</h2>
-            <form class="form-stack" method="post" action="/api/commerce/seller/register">
-                <AntiforgeryToken />
-                <label>Store name <input name="displayName" autocomplete="organization" maxlength="100" required /></label>
-                <label>Store slug
-                    <input name="slug" autocapitalize="none" spellcheck="false" minlength="3" maxlength="64" aria-describedby="seller-slug-hint" required />
-                </label>
-                <p id="seller-slug-hint" class="muted">Use unaccented letters, numbers, and hyphens.</p>
-                <button class="button" type="submit">Submit registration</button>
-            </form>
+            <a class="button" href="/account/store">Open store applications</a>
         </section>
     </div>
 }

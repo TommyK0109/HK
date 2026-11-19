@@ -543,15 +543,11 @@ public sealed partial class SqlMarketplaceFulfillmentTests
             context.Add(category);
             await context.SaveChangesAsync();
 
-            var sku = new Sku { Code = "SKU-P3", Size = "L", Color = "Blue", Active = true, PriceVnd = 150_000m };
-            var product = new Product
-            {
-                CategoryId = category.Id, Name = "Smart Watch", Slug = "smart-watch", Description = "Desc",
-                Skus = [sku], Images = [new ProductImage { FileName = "watch.webp", Alt = "Watch" }]
-            };
-            product.Publish(true);
-            context.Add(product);
+            var productId = await SqlTestDatabase.InsertLegacyProduct(context, "Smart Watch", "smart-watch", category.Id);
+            var sku = new Sku { ProductId = productId, Code = "SKU-P3", Size = "L", Color = "Blue", Active = true, PriceVnd = 150_000m };
+            context.AddRange(sku, new ProductImage { ProductId = productId, FileName = "watch.webp", Alt = "Watch" });
             await context.SaveChangesAsync();
+            await context.Database.ExecuteSqlInterpolatedAsync($"UPDATE dbo.Products SET Status = 1 WHERE Id = {productId}");
 
             var offerId = await context.Set<SellerOffer>()
                 .Where(o => o.SellerId == Seller.FirstPartyId && o.SkuId == sku.Id)
@@ -702,11 +698,13 @@ public sealed partial class SqlMarketplaceFulfillmentTests
         };
         product1.Publish(true);
 
+        var seller2Id = await StoreApplicationFixture.Open(store, clock, admin, seller2Owner, "Partner Store");
         var sku2 = new Sku { Code = "SKU-2", Size = "M", Color = "Black", Active = true, PriceVnd = null };
+        var partnerVariant = new Sku { Code = "PARTNER-SKU-1", Size = "L", Color = "Blue", Active = true };
         var product2 = new Product
         {
-            CategoryId = category.Id, Name = "Seller Cap", Slug = "seller-cap", Description = "Cap",
-            Skus = [sku2], Images = [new ProductImage { FileName = "p2.webp", Alt = "P2" }]
+            SellerId = seller2Id, CategoryId = category.Id, Name = "Seller Cap", Slug = "seller-cap", Description = "Cap",
+            Skus = [sku2, partnerVariant], Images = [new ProductImage { FileName = "p2.webp", Alt = "P2" }]
         };
         product2.Publish(true);
         context.AddRange(product1, product2);
@@ -715,16 +713,12 @@ public sealed partial class SqlMarketplaceFulfillmentTests
         var inventory = new InventoryService(store, clock);
         await inventory.Adjust(staff, sku1.Id, 10, 1, "Initial stock");
 
-        var sellers = new SellerService(store, clock);
-        var seller2Id = await sellers.Register(seller2Owner, "Partner Store", "partner-store");
-        await sellers.SetStatus(admin, seller2Id, SellerStatus.Active, null);
-
         var loc2 = new SellerLocation { SellerId = seller2Id, Name = "Partner Warehouse", Active = true };
         context.Add(loc2);
         await context.SaveChangesAsync();
 
         var offer1 = await context.Set<SellerOffer>().SingleAsync(o => o.SellerId == Seller.FirstPartyId && o.SkuId == sku1.Id);
-        var offer2a = new SellerOffer { SellerId = seller2Id, SkuId = sku1.Id, SellerSkuCode = "P2-SKU1", PriceVnd = 180_000m, Status = SellerOfferStatus.Approved };
+        var offer2a = new SellerOffer { SellerId = seller2Id, SkuId = partnerVariant.Id, SellerSkuCode = "P2-SKU1", PriceVnd = 180_000m, Status = SellerOfferStatus.Approved };
         var offer2b = new SellerOffer { SellerId = seller2Id, SkuId = sku2.Id, SellerSkuCode = "P2-SKU2", PriceVnd = 100_000m, Status = SellerOfferStatus.Approved };
         context.AddRange(offer2a, offer2b);
         await context.SaveChangesAsync();

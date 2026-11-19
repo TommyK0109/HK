@@ -40,7 +40,7 @@ internal sealed class StorefrontOffer
                    SellerSkuCode = offer.SellerSkuCode, Size = sku.Size, Color = sku.Color, ProductId = product.Id,
                    Slug = product.Slug, Name = product.Name, Price = offer.PriceVnd ?? 0,
                    Available = balance == null ? 0 : balance.OnHand - balance.Reserved,
-                   Active = balance != null && offer.Status == SellerOfferStatus.Approved && offer.PriceVnd > 0
+                   Active = product.SellerId == offer.SellerId && balance != null && offer.Status == SellerOfferStatus.Approved && offer.PriceVnd > 0
                        && seller.Status == SellerStatus.Active && sku.Active && product.Status == ProductStatus.Published
                        && categories.Any(category => category.Id == product.CategoryId && category.Active)
                };

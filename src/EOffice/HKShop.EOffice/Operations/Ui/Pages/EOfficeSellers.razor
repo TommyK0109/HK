@@ -2,10 +2,32 @@
 @layout EOfficeLayout
 @attribute [Authorize(Policy = ShopPolicies.EOfficeAdmin)]
 @inject ICommerceOperationsPort Commerce
+@inject IStoreApplicationReview Applications
 @inject IShopRequestContext Request
 
 <PageTitle>Store management · HKShop EOffice</PageTitle>
 <h1>Store</h1>
+
+@if (applications is not null)
+{
+    <section class="panel">
+        <h2>Store applications</h2>
+        @if (applications.Total == 0)
+        {
+            <p>No store applications yet.</p>
+        }
+        <ul class="clean-list">
+            @foreach (var application in applications.Items)
+            {
+                <li>
+                    <a href="@($"/eoffice/sellers/applications/{application.Id:D}")">@application.StoreName</a>
+                    <span>@application.Status · @ShopDisplay.Date(application.SubmittedAt)</span>
+                </li>
+            }
+        </ul>
+        <Pager Current="applications.Number" Last="applications.Last" Url="ApplicationUrl" />
+    </section>
+}
 
 @if (sellers is not null)
 {
@@ -24,14 +46,13 @@
                 {
                     <p class="muted">HKShop store</p>
                 }
-                else
+                else if (seller.Status != SellerStatus.Closed)
                 {
                     <p class="muted">@seller.OwnerEmail · Registered @ShopDisplay.Date(seller.CreatedAt)</p>
                     var active = seller.Status == SellerStatus.Active;
                     var nextStatus = active ? SellerStatus.Suspended : SellerStatus.Active;
                     var action = seller.Status switch
                     {
-                        SellerStatus.Pending => "Approve store",
                         SellerStatus.Active => "Suspend store",
                         _ => "Restore store"
                     };
@@ -53,9 +74,17 @@
 
 @code {
     [SupplyParameterFromQuery(Name = "page")] public int? Number { get; set; }
+    [SupplyParameterFromQuery(Name = "applications")] public int? ApplicationPage { get; set; }
     private Page<PlatformSeller>? sellers;
+    private Page<StoreApplicationSummary>? applications;
 
-    protected override async Task OnParametersSetAsync() => sellers = await Commerce.PlatformSellersAsync(await Request.Actor(), Number ?? 1);
+    protected override async Task OnParametersSetAsync()
+    {
+        var actor = await Request.Actor();
+        sellers = await Commerce.PlatformSellersAsync(actor, Number ?? 1);
+        applications = await Applications.Queue(actor, ApplicationPage ?? 1);
+    }
 
-    private static string PageUrl(int page) => $"/eoffice/sellers?page={page}";
+    private string PageUrl(int page) => $"/eoffice/sellers?page={page}&applications={ApplicationPage ?? 1}";
+    private string ApplicationUrl(int page) => $"/eoffice/sellers?page={Number ?? 1}&applications={page}";
 }

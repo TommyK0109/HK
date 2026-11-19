@@ -2,7 +2,6 @@ using HKShop.Application;
 using HKShop.Application.Sellers;
 using HKShop.Domain;
 using HKShop.Infrastructure.Persistence;
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
@@ -11,21 +10,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace HKShop.Web;
-
-public sealed record ShopPlatformRequirement(Func<ShopActor, bool> Predicate) : IAuthorizationRequirement;
-
-public sealed class ShopPlatformAuthorizationHandler(IHttpContextAccessor accessor) : AuthorizationHandler<ShopPlatformRequirement>
-{
-    protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context, ShopPlatformRequirement requirement)
-    {
-        var httpContext = context.Resource as HttpContext ?? accessor.HttpContext;
-        if (httpContext is null) return;
-        var req = httpContext.RequestServices.GetRequiredService<IShopRequestContext>();
-        var actor = await req.Actor();
-        if (requirement.Predicate(actor))
-            context.Succeed(requirement);
-    }
-}
 
 public sealed class ShopFailureFilter(ITempDataDictionaryFactory messages, ILogger<ShopFailureFilter> log) : IExceptionFilter
 {

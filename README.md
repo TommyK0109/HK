@@ -11,13 +11,15 @@ A Vietnamese marketplace built with .NET 10, Blazor, ASP.NET Core Identity, EF C
 Open PowerShell in the directory containing `HKShop.slnx`. Checkout uses SQL Server and Kafka. To start them with Mailpit in Docker, copy `deploy/.env.example` to `deploy/.env`, set `HKSHOP_SQL_SA_PASSWORD`, and run the Compose command.
 
 ```powershell
-docker compose --env-file deploy/.env -f deploy/compose.yaml up -d sql mailpit seq kafka-init
+docker compose --env-file deploy/.env -f deploy/compose.yaml up -d --build sql mailpit seq notification
 ```
 
-Development defaults to Kafka at `127.0.0.1:9092`. To reuse an existing Kafka container, start only the other services and set `Kafka__BootstrapServers` if the advertised address differs. Create the checkout topic once using the broker's CLI.
+Development defaults to Kafka at `127.0.0.1:9092`. Compose initializes the checkout, ordering and Notification dead-letter topics. Notification creates and migrates its own local SQL database, `HKShopNotification`. Its job table, `ConfirmationEmails`, retains sent jobs for replay protection. To reuse an existing broker, initialize the same topics on that broker and configure both processes to reach it.
 
 ```powershell
-docker exec <kafka-container> /opt/kafka/bin/kafka-topics.sh --bootstrap-server <broker-listener> --create --if-not-exists --topic hkshop.checkout.requests.v1 --partitions 1 --replication-factor 1
+foreach ($topic in 'hkshop.checkout.requests.v1','hkshop.ordering.events.v1','hkshop.ordering.events.v1.notification.dlq.v1') {
+    docker exec <kafka-container> /opt/kafka/bin/kafka-topics.sh --bootstrap-server <broker-listener> --create --if-not-exists --topic $topic --partitions 1 --replication-factor 1
+}
 ```
 
 Configure the same database for the EF tool and the web app. Use the original database connection only when you intend to upgrade it. A database that contains the original `dbo.Products` table should also contain the existing `20261111082232_InitialProducts` migration record. Take a backup before upgrading existing data.
@@ -46,20 +48,21 @@ When upgrading, the migration keeps each original product ID, name, and price an
 
 ## Seller onboarding and access
 
-Apply the latest EF Core migration before opening the seller console. The migration assigns existing orders to HKShop's first-party seller. Platform staff continue to pack, ship, and complete existing COD orders through the EOffice console (`/eoffice/orders`).
+Apply the latest EF Core migration before opening the seller console.
 
-1. Sign in with a confirmed customer email at `/account/login` and register a seller from **Seller center** (`/seller`). A platform administrator signs in with MFA at `/eoffice/login` and approves the seller at `/eoffice/sellers`.
-2. Enroll an authenticator under `/account/security`, then sign in with MFA. Choose a seller workspace from `/seller`. If your account belongs to several sellers, return to that list to switch workspaces.
+1. Sign in with a confirmed customer email and open **Account → Register a store** (`/account/store`). Enter product names and whole-VND prices manually or upload a UTF-8 CSV up to 5 MB with the headers `product_name,price_vnd`. Enter the national ID and business license numbers and upload both sides of the ID card and a copy of the license.
+2. An EOffice administrator reviews the application at `/eoffice/sellers` and records a decision. HKShop posts the result to the account and queues an email through the configured SMTP server. Approved applicants can open their seller workspace after signing in with MFA.
 3. As an owner, invite staff by email and select their role. The invitee opens the emailed link and accepts it with the matching confirmed account and MFA. Configure `Shop:PublicOrigin` to your HTTPS origin outside Development so the outbox can send working invitation links.
 4. Owners and finance staff can view and export sales for their active seller. Owners can also view that seller's audit history and revoke invitations or staff memberships. Platform administrators can suspend and reactivate third-party sellers.
+5. Store verification numbers and documents are encrypted using HKShop's Data Protection keys. Back up the configured key ring with the database. Owners can permanently close their store to stop new sales and remove its verification numbers and files while keeping order and settlement history.
 
 ## Marketplace offers and inventory
 
-Apply `MarketplaceOffersAndInventory` before starting the updated app. The migration creates HKShop offers from existing SKUs, carries over stock and movement history, and keeps 1st-party offers synchronized with the EOffice catalog and inventory screens.
+The catalog ownership migration assigns existing products and imports to HKShop. Each seller can list products and variants owned by their store.
 
-1. Open **Offers and inventory** (`/seller/{id}/catalog`) from an approved seller workspace as an owner or catalog manager. Search for a published variant, enter a seller SKU code, price, and initial stock quantity, and submit the offer. Adjust seller stock (`/api/commerce/inventory/seller/{sellerId}/offers/{offerId}/stock`) and view the offer's movement history there.
-2. Approve offers and review product proposals at `/eoffice/marketplace`. An approved product proposal creates a draft in the shared catalog. Add an image and an active variant in `/eoffice/products/{id}`, then publish it so sellers can submit offers. EOffice automatically aggregates total active offer stock (`TotalOfferOnHand` and `TotalOfferAvailable`) on the SKU alongside 1st-party stock. Use a price of `0` on the variant when HKShop will leave the selling to third-party sellers.
-3. The storefront shows a default offer based on stock availability, price, then offer ID. Buyers can choose another seller on the product page and pay for offers from multiple sellers in one SePay checkout.
+1. Open **Offers and inventory** (`/seller/{id}/catalog`) as the owner or catalog manager of an approved store. Upload the product name, category, description, and photos. Enter an offer code, price, and starting quantity for each variant.
+2. EOffice reviews the product details and its variant offers at `/eoffice/marketplace`. Approval of the first variant offer publishes the product. Each approved offer becomes eligible for the storefront. The seller can adjust prices and inventory in their workspace.
+3. Buyers can purchase offers from several stores in one checkout. HKShop creates a separate seller order for each store.
 
 ## Fulfillment and returns
 

@@ -21,9 +21,7 @@ public sealed class EOfficeTransportController(
     public async Task<IActionResult> Shipper(string email, bool active)
     {
         CheckForm();
-        var (userId, confirmedEmail) = await auth.LookupConfirmedUserForShipperAsync(ShopRules.Text(email, 256, "Shipper email"));
-        await shippingAdmin.ConfigureShipperAsync(await request.Actor(), userId, confirmedEmail, active);
-        await auth.SyncShipperRoleAsync(userId, active);
+        await auth.SetShipperAccessAsync(await request.Actor(), ShopRules.Text(email, 256, "Shipper email"), active);
         TempData["Notice"] = "Shipper access updated.";
         return Redirect("/eoffice/transport");
     }

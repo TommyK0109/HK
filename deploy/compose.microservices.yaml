@@ -1,0 +1,340 @@
+name: hkshop-microservices
+
+services:
+  sql:
+    image: ${HKSHOP_SQL_IMAGE:-mcr.microsoft.com/mssql/server:2022-latest}
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${HKSHOP_SQL_SA_PASSWORD:?Set a SQL Server development password}
+    ports:
+      - "127.0.0.1:${HKSHOP_SQL_PORT:-1433}:1433"
+    volumes:
+      - ms_sql_data:/var/opt/mssql
+    networks:
+      - database
+
+  mailpit:
+    image: ${HKSHOP_MAILPIT_IMAGE:-axllent/mailpit:v1.27}
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
+    networks:
+      - web
+
+  seq:
+    image: ${HKSHOP_SEQ_IMAGE:-datalust/seq:latest}
+    environment:
+      ACCEPT_EULA: "Y"
+      SEQ_FIRSTRUN_NOAUTHENTICATION: "True"
+    ports:
+      - "127.0.0.1:${HKSHOP_SEQ_PORT:-5341}:80"
+    volumes:
+      - ms_seq_data:/data
+    networks:
+      - web
+    restart: unless-stopped
+
+  azurite:
+    image: ${HKSHOP_AZURITE_IMAGE:-mcr.microsoft.com/azure-storage/azurite:latest}
+    command: azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0
+    ports:
+      - "127.0.0.1:10000:10000"
+    volumes:
+      - ms_azurite_data:/data
+    networks:
+      - web
+    restart: unless-stopped
+
+  kafka:
+    image: apache/kafka:4.3.2
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:19092,HOST://:9092,CONTROLLER://:29093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,HOST://127.0.0.1:${HKSHOP_KAFKA_PORT:-9092}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    ports:
+      - "127.0.0.1:${HKSHOP_KAFKA_PORT:-9092}:9092"
+    volumes:
+      - ms_kafka_data:/var/lib/kafka/data
+    networks:
+      - web
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "kafka:19092", "--list"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  kafka-init:
+    image: apache/kafka:4.3.2
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        for topic in \
+          hkshop.identity.events.v1 \
+          hkshop.catalog.events.v1 \
+          hkshop.ordering.events.v1 \
+          hkshop.payments.events.v1 \
+          hkshop.shipping.events.v1 \
+          hkshop.checkout.requests.v1 \
+          hkshop.identity.events.v1.notification.dlq.v1 \
+          hkshop.catalog.events.v1.ordering.dlq.v1 \
+          hkshop.catalog.events.v1.shipping.dlq.v1 \
+          hkshop.catalog.events.v1.payments.dlq.v1 \
+          hkshop.catalog.events.v1.notification.dlq.v1 \
+          hkshop.ordering.events.v1.catalog.dlq.v1 \
+          hkshop.ordering.events.v1.payments.dlq.v1 \
+          hkshop.ordering.events.v1.shipping.dlq.v1 \
+          hkshop.ordering.events.v1.notification.dlq.v1 \
+          hkshop.payments.events.v1.ordering.dlq.v1 \
+          hkshop.payments.events.v1.shipping.dlq.v1 \
+          hkshop.payments.events.v1.notification.dlq.v1 \
+          hkshop.shipping.events.v1.ordering.dlq.v1 \
+          hkshop.shipping.events.v1.payments.dlq.v1 \
+          hkshop.shipping.events.v1.notification.dlq.v1; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic "$$topic" --partitions 1 --replication-factor 1
+        done
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - web
+
+  identity:
+    build:
+      context: ..
+      dockerfile: deploy/Identity.Dockerfile
+    environment:
+      ASPNETCORE_HTTP_PORTS: 8080
+      ConnectionStrings__Identity: Server=sql;Database=HKShopIdentity;User ID=sa;Password=${HKSHOP_SQL_SA_PASSWORD};Encrypt=True;TrustServerCertificate=True
+      Kafka__BootstrapServers: kafka:19092
+      Seq__ServerUrl: http://seq:5341
+      Jwt__Issuer: https://hkshop.identity
+      Jwt__Audience: hkshop.services
+      Jwt__SigningKey: ${HKSHOP_JWT_SIGNING_KEY:-hkshop-dev-signing-key-at-least-32-bytes-long!}
+      Shop__PublicOrigin: https://${HKSHOP_HOSTNAME:-localhost}
+    depends_on:
+      sql:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+    networks: [database, web]
+    restart: unless-stopped
+
+  catalog:
+    build:
+      context: ..
+      dockerfile: deploy/Catalog.Dockerfile
+    environment:
+      ASPNETCORE_HTTP_PORTS: 8080
+      ConnectionStrings__Catalog: Server=sql;Database=HKShopCatalog;User ID=sa;Password=${HKSHOP_SQL_SA_PASSWORD};Encrypt=True;TrustServerCertificate=True
+      Kafka__BootstrapServers: kafka:19092
+      Seq__ServerUrl: http://seq:5341
+      Jwt__Issuer: https://hkshop.identity
+      Jwt__Audience: hkshop.services
+      Jwt__SigningKey: ${HKSHOP_JWT_SIGNING_KEY:-hkshop-dev-signing-key-at-least-32-bytes-long!}
+      Shop__MediaPath: /var/lib/hkshop/media
+      Shop__KeysPath: /var/lib/hkshop/keys
+    volumes:
+      - ms_media_data:/var/lib/hkshop/media
+      - ms_key_data:/var/lib/hkshop/keys
+    depends_on:
+      sql:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+    networks: [database, web]
+    restart: unless-stopped
+
+  ordering:
+    build:
+      context: ..
+      dockerfile: deploy/Ordering.Dockerfile
+    environment:
+      ASPNETCORE_HTTP_PORTS: 8080
+      ConnectionStrings__Ordering: Server=sql;Database=HKShopOrdering;User ID=sa;Password=${HKSHOP_SQL_SA_PASSWORD};Encrypt=True;TrustServerCertificate=True
+      Kafka__BootstrapServers: kafka:19092
+      Seq__ServerUrl: http://seq:5341
+      Jwt__Issuer: https://hkshop.identity
+      Jwt__Audience: hkshop.services
+      Jwt__SigningKey: ${HKSHOP_JWT_SIGNING_KEY:-hkshop-dev-signing-key-at-least-32-bytes-long!}
+      Services__Identity__BaseUrl: http://identity:8080
+      Services__Catalog__BaseUrl: http://catalog:8080
+      Services__Shipping__BaseUrl: http://shipping:8080
+      Transport__Enabled: ${HKSHOP_TRANSPORT_ENABLED:-false}
+    depends_on:
+      sql:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+      catalog:
+        condition: service_started
+      shipping:
+        condition: service_started
+    networks: [database, web]
+    restart: unless-stopped
+
+  payments:
+    build:
+      context: ..
+      dockerfile: deploy/Payments.Dockerfile
+    environment:
+      ASPNETCORE_HTTP_PORTS: 8080
+      ConnectionStrings__Payments: Server=sql;Database=HKShopPayments;User ID=sa;Password=${HKSHOP_SQL_SA_PASSWORD};Encrypt=True;TrustServerCertificate=True
+      Kafka__BootstrapServers: kafka:19092
+      Seq__ServerUrl: http://seq:5341
+      Jwt__Issuer: https://hkshop.identity
+      Jwt__Audience: hkshop.services
+      Jwt__SigningKey: ${HKSHOP_JWT_SIGNING_KEY:-hkshop-dev-signing-key-at-least-32-bytes-long!}
+      Shop__PublicOrigin: https://${HKSHOP_HOSTNAME:-localhost}
+      SePay__MerchantId: ${HKSHOP_SEPAY_MERCHANT_ID:-}
+      SePay__MerchantSecret: ${HKSHOP_SEPAY_MERCHANT_SECRET:-}
+      SePay__IpnSecret: ${HKSHOP_SEPAY_IPN_SECRET:-}
+    depends_on:
+      sql:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+    networks: [database, web]
+    restart: unless-stopped
+
+  shipping:
+    build:
+      context: ..
+      dockerfile: deploy/Shipping.Dockerfile
+    environment:
+      ASPNETCORE_HTTP_PORTS: 8080
+      ConnectionStrings__Shipping: Server=sql;Database=HKShopShipping;User ID=sa;Password=${HKSHOP_SQL_SA_PASSWORD};Encrypt=True;TrustServerCertificate=True
+      Kafka__BootstrapServers: kafka:19092
+      Seq__ServerUrl: http://seq:5341
+      Jwt__Issuer: https://hkshop.identity
+      Jwt__Audience: hkshop.services
+      Jwt__SigningKey: ${HKSHOP_JWT_SIGNING_KEY:-hkshop-dev-signing-key-at-least-32-bytes-long!}
+      Transport__Enabled: ${HKSHOP_TRANSPORT_ENABLED:-false}
+      Transport__RoutingBaseUrl: ${HKSHOP_TRANSPORT_ROUTING_BASE_URL:-}
+      Transport__BankName: ${HKSHOP_TRANSPORT_BANK_NAME:-}
+      Transport__BankAccount: ${HKSHOP_TRANSPORT_BANK_ACCOUNT:-}
+      Transport__BankWebhookKey: ${HKSHOP_TRANSPORT_BANK_WEBHOOK_KEY:-}
+    depends_on:
+      sql:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+    networks: [database, web]
+    restart: unless-stopped
+
+  notification:
+    build:
+      context: ..
+      dockerfile: deploy/Notification.Dockerfile
+    environment:
+      ConnectionStrings__Notification: Server=sql;Database=HKShopNotification;User ID=sa;Password=${HKSHOP_SQL_SA_PASSWORD};Encrypt=True;TrustServerCertificate=True
+      Kafka__BootstrapServers: kafka:19092
+      Kafka__OrderingTopic: hkshop.ordering.events.v1
+      Kafka__EventTopics: hkshop.identity.events.v1,hkshop.catalog.events.v1,hkshop.ordering.events.v1,hkshop.payments.events.v1,hkshop.shipping.events.v1
+      Smtp__Host: mailpit
+      Seq__ServerUrl: http://seq:5341
+    depends_on:
+      sql:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_started
+    networks: [database, web]
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Staging
+      ASPNETCORE_HTTP_PORTS: 8080
+      HttpsRedirection__Enabled: "false"
+      AllowedHosts: ${HKSHOP_HOSTNAME:-localhost};web
+      ConnectionStrings__HKShop: ${HKSHOP_APP_CONNECTION:-Server=sql,1433;Database=HKShopLocal;User ID=sa;Password=${HKSHOP_SQL_SA_PASSWORD};Encrypt=True;TrustServerCertificate=True}
+      Shop__PublicOrigin: https://${HKSHOP_HOSTNAME:-localhost}
+      Shop__MediaPath: /var/lib/hkshop/media
+      Shop__KeysPath: /var/lib/hkshop/keys
+      Smtp__Host: mailpit
+      Seq__ServerUrl: http://seq:5341
+      Kafka__BootstrapServers: kafka:19092
+      Jwt__Issuer: https://hkshop.identity
+      Jwt__Audience: hkshop.services
+      Jwt__SigningKey: ${HKSHOP_JWT_SIGNING_KEY:-hkshop-dev-signing-key-at-least-32-bytes-long!}
+      Services__Identity__BaseUrl: http://identity:8080
+      Services__Catalog__BaseUrl: http://catalog:8080
+      Services__Ordering__BaseUrl: http://ordering:8080
+      Services__Payments__BaseUrl: http://payments:8080
+      Services__Shipping__BaseUrl: http://shipping:8080
+      Identity__UseJwtAuth: ${HKSHOP_IDENTITY_USE_JWT_AUTH:-true}
+      Notification__RetireLegacyEmailWorker: ${HKSHOP_RETIRE_LEGACY_EMAIL_WORKER:-false}
+      Transport__Enabled: ${HKSHOP_TRANSPORT_ENABLED:-false}
+    volumes:
+      - ms_media_data:/var/lib/hkshop/media
+      - ms_key_data:/var/lib/hkshop/keys
+    depends_on:
+      sql:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+      identity:
+        condition: service_started
+      catalog:
+        condition: service_started
+      ordering:
+        condition: service_started
+      payments:
+        condition: service_started
+      shipping:
+        condition: service_started
+    networks: [database, web]
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Gateway.Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Staging
+      ASPNETCORE_HTTP_PORTS: 8080
+      AllowedHosts: ${HKSHOP_HOSTNAME:-localhost};gateway
+      Destinations__Web: http://web:8080
+      Destinations__Catalog: http://catalog:8080
+      Destinations__Payments: http://payments:8080
+      Destinations__Shipping: http://shipping:8080
+      HttpsRedirection__Enabled: "false"
+      Seq__ServerUrl: http://seq:5341
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      - web
+      - catalog
+      - payments
+      - shipping
+      - seq
+    networks:
+      - web
+    restart: unless-stopped
+
+networks:
+  web:
+  database:
+
+volumes:
+  ms_sql_data:
+  ms_kafka_data:
+  ms_seq_data:
+  ms_azurite_data:
+  ms_media_data:
+  ms_key_data:

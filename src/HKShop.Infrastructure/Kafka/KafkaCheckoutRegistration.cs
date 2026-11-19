@@ -16,6 +16,7 @@ public static class KafkaCheckoutRegistration
         services.AddScoped<CheckoutRequests>();
         services.AddHostedService<CheckoutPublisher>();
         services.AddHostedService<CheckoutConsumer>();
+        services.AddHostedService<OrderConfirmationRelay>();
         return services;
     }
 }

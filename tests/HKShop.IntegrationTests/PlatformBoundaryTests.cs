@@ -72,7 +72,7 @@ public sealed class PlatformBoundaryTests
             var cart = new CartService(store, clock);
             var checkout = new CheckoutService(store, new ShopSettings(), clock);
             var catalog = new CatalogService(store, new UnusedImageStore(), clock);
-            var sellers = new SellerService(store, clock);
+            var applications = StoreApplicationFixture.Service(store, clock);
             var sellerCatalog = new SellerCatalogService(store, clock);
 
             // Employees and shippers are blocked from shopping cart, checkout, product reviews, seller onboarding, and seller inventory
@@ -85,7 +85,7 @@ public sealed class PlatformBoundaryTests
                 await Assert.ThrowsAsync<ShopRuleException>(() =>
                     catalog.SubmitReview(employee, product.Slug, "Employee review", 5));
                 await Assert.ThrowsAsync<ShopRuleException>(() =>
-                    sellers.Register(employee, "Employee Shop", "employee-shop"));
+                    StoreApplicationFixture.Submit(applications, employee, "Employee Shop"));
                 await Assert.ThrowsAsync<SellerAccessDeniedException>(() =>
                     sellerCatalog.CreateOffer(employee, 2, sku.Id, "EMP-1", 100_000m, 5));
             }
@@ -97,7 +97,7 @@ public sealed class PlatformBoundaryTests
     }
 
     [SqlFact]
-    public async Task SeparatedInventoryAndInitialOfferStock_AggregatesSkuAvailabilityWithoutTouchingFirstPartyStock()
+    public async Task SellerProductStockAndOffersAreSeparateFromFirstPartyStock()
     {
         var factory = SqlTestDatabase.Create();
         await using var context = factory.CreateDbContext();
@@ -153,14 +153,17 @@ public sealed class PlatformBoundaryTests
 
             await catalogOps.AdjustFirstPartyStockAsync(admin, skuId, delta: 5, threshold: 2, reason: "1P initial stock");
 
-            // 2. Seller registers store, gets approved by EOffice, and creates offer with initialQuantity = 12
-            var sellerId = await sellerService.Register(sellerOwner, "Sneaker Hub", "sneaker-hub");
-            await commerceOps.SetSellerStatusAsync(admin, sellerId, SellerStatus.Active, "Approved");
-
-            await sellerCatalogService.CreateOffer(sellerOwner, sellerId, skuId, "SH-RUN-42", 480_000m, initialQuantity: 12);
+            var sellerId = await StoreApplicationFixture.Open(store, clock, admin, sellerOwner, "Sneaker Hub");
+            await Assert.ThrowsAsync<ShopRuleException>(() =>
+                sellerCatalogService.CreateOffer(sellerOwner, sellerId, skuId, "SH-RUN-42", 480_000m, initialQuantity: 12));
+            Assert.Empty((await sellerCatalogService.Catalog(sellerOwner, sellerId, "RUN-42", 1, 1, null)).Variants);
+            var sellerProductId = await sellerCatalogService.SubmitProduct(sellerOwner, sellerId, "Seller Runner", "Store shoe",
+                categoryId, [new("SH-RUN-42", "42", "White", 480_000m, 12)], [() => new MemoryStream([1])], new TestImageStore());
+            var sellerSkuId = await context.Set<Sku>().Where(s => s.ProductId == sellerProductId).Select(s => s.Id).SingleAsync();
 
             var sellerOffer = await context.Set<SellerOffer>().AsNoTracking()
-                .SingleAsync(o => o.SellerId == sellerId && o.SkuId == skuId);
+                .SingleAsync(o => o.SellerId == sellerId && o.SkuId == sellerSkuId);
+            Assert.False(await context.Set<SellerOffer>().AnyAsync(o => o.SellerId == Seller.FirstPartyId && o.SkuId == sellerSkuId));
             var sellerBalance = await context.Set<InventoryBalance>().AsNoTracking()
                 .SingleAsync(b => b.OfferId == sellerOffer.Id);
             Assert.Equal(12, sellerBalance.OnHand);
@@ -181,22 +184,23 @@ public sealed class PlatformBoundaryTests
             Assert.Equal(5, beforeApproval.TotalOfferOnHand);
             Assert.Equal(5, beforeApproval.TotalOfferAvailable);
 
-            // 3. EOffice approves the seller offer -> SKU total offer stock automatically aggregates 5 + 12 = 17
             await commerceOps.ReviewOfferAsync(admin, sellerOffer.Id, approve: true);
 
             var afterApproval = (await catalogOps.EditDetailsAsync(admin, productId)).Variants.Single();
             Assert.Equal(5, afterApproval.Available);
-            Assert.Equal(17, afterApproval.TotalOfferOnHand);
-            Assert.Equal(17, afterApproval.TotalOfferAvailable);
+            Assert.Equal(5, afterApproval.TotalOfferOnHand);
+            Assert.Equal(5, afterApproval.TotalOfferAvailable);
+            var sellerProduct = await context.Set<Product>().AsNoTracking().SingleAsync(p => p.Id == sellerProductId);
+            Assert.Equal(12, Assert.Single((await catalogService.Details(sellerProduct.Slug))!.Offers).Available);
 
-            // 4. Seller adjusts their own offer stock (+3 -> 15) -> 1P stock remains 5, aggregated offer stock becomes 20
             await sellerCatalogService.AdjustStock(sellerOwner, sellerId, sellerOffer.Id, delta: 3, reason: "Restock shipment");
 
             var inventoryRow = (await catalogOps.ListFirstPartyStockAsync(admin, low: false, page: 1)).Items.Single(r => r.SkuId == skuId);
             Assert.Equal(5, inventoryRow.OnHand);
             Assert.Equal(5, inventoryRow.Available);
-            Assert.Equal(20, inventoryRow.TotalOfferOnHand);
-            Assert.Equal(20, inventoryRow.TotalOfferAvailable);
+            Assert.Equal(5, inventoryRow.TotalOfferOnHand);
+            Assert.Equal(5, inventoryRow.TotalOfferAvailable);
+            Assert.Equal(15, Assert.Single((await catalogService.Details(sellerProduct.Slug))!.Offers).Available);
         }
         finally
         {
@@ -207,6 +211,11 @@ public sealed class PlatformBoundaryTests
     private sealed class UnusedImageStore : IProductImageStore
     {
         public Task<string> Save(Stream source) => throw new NotSupportedException();
+    }
+
+    private sealed class TestImageStore : IProductImageStore
+    {
+        public Task<string> Save(Stream source) => Task.FromResult("seller-runner.png");
     }
 
     private sealed class DummyPaymentGateway : IPaymentGateway

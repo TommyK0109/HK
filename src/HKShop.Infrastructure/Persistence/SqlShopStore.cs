@@ -51,7 +51,7 @@ public sealed class SqlShopStore(IDbContextFactory<ShopDbContext> factory) : ISh
         return false;
     }
 
-    private sealed class Session(ShopDbContext context) : IShopSession
+    internal sealed class Session(ShopDbContext context) : IShopSession
     {
         public IQueryable<T> Query<T>() where T : class => context.Set<T>();
         public Task<List<T>> List<T>(IQueryable<T> query) => query.ToListAsync();

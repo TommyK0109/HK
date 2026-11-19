@@ -12,7 +12,7 @@ namespace HKShop.IntegrationTests;
 public sealed class PlatformInventoryHttpTests
 {
     [SqlFact]
-    public async Task InventoryForms_KeepFirstPartyAndSellerStockSeparateWhileShowingMarketplaceTotals()
+    public async Task InventoryFormsKeepFirstPartyAndSellerProductsSeparate()
     {
         await using var db = SqlTestDatabase.Create().CreateDbContext();
         try
@@ -23,7 +23,7 @@ public sealed class PlatformInventoryHttpTests
             using var eoffice = await app.CreateBrowserAsync(admin.Id);
             using var commerce = await app.CreateBrowserAsync(owner.Id);
 
-            var (product, sku, alternateSku, seller) = await SeedCatalogAsync(db, owner);
+            var (product, sku, alternateSku, firstPartySku, seller) = await SeedCatalogAsync(db, owner);
             var catalogPage = $"/seller/{seller.Id}/catalog";
             var offersAction = $"/api/commerce/seller/{seller.Id}/catalog/offers";
             const string inventoryPage = "/eoffice/inventory";
@@ -34,6 +34,10 @@ public sealed class PlatformInventoryHttpTests
             var sellerCatalog = await commerce.GetStringAsync(catalogPage);
             Assert.Contains($"action=\"{offersAction}\"", sellerCatalog);
             Assert.Contains("name=\"quantity\"", sellerCatalog);
+            Assert.DoesNotContain(firstPartySku.Code, sellerCatalog);
+            await AssertRedirectAsync(PlatformHttpTestHost.PostFormAsync(commerce, offersAction, catalogPage,
+                OfferForm(firstPartySku.Id, "FORBIDDEN", "1")), catalogPage);
+            Assert.Contains("This variant is not available for listing.", await commerce.GetStringAsync(catalogPage));
             await AssertRedirectAsync(PlatformHttpTestHost.PostFormAsync(commerce, offersAction, catalogPage,
                 OfferForm(sku.Id, "SELLER-POSITIVE", "12")), catalogPage);
 
@@ -69,7 +73,7 @@ public sealed class PlatformInventoryHttpTests
                 new() { ["delta"] = "3", ["reason"] = "Seller restock" }), $"{catalogPage}?history={offer.Id}#stock-history");
             Assert.Equal(5, (await FirstPartyStockAsync()).OnHand);
             Assert.Equal(15, (await SellerStockAsync()).OnHand);
-            Assert.Contains("Marketplace on hand 20 · Marketplace available 20", await InventoryHtmlAsync());
+            Assert.Contains("Marketplace on hand 5 · Marketplace available 5", await InventoryHtmlAsync());
 
             // Seed reserved units to distinguish available from on-hand stock in the rendered totals.
             var reservedStock = await db.Set<InventoryBalance>().SingleAsync(b => b.OfferId == offer.Id);
@@ -81,10 +85,10 @@ public sealed class PlatformInventoryHttpTests
             Assert.Equal((7, 4), (firstParty.OnHand, firstParty.LowThreshold));
             var thirdParty = await SellerStockAsync();
             Assert.Equal((15, 4), (thirdParty.OnHand, thirdParty.Reserved));
-            Assert.Contains("1P On hand 7 · 1P Reserved 0 · Marketplace on hand 22 · Marketplace available 18",
+            Assert.Contains("1P On hand 7 · 1P Reserved 0 · Marketplace on hand 7 · Marketplace available 7",
                 await InventoryHtmlAsync());
             var editPage = WebUtility.HtmlDecode(await eoffice.GetStringAsync($"/eoffice/products/{product.Id}"));
-            Assert.Contains($"{sku.Code} · Active · Available 7 · Marketplace available 18 (on hand 22)", editPage);
+            Assert.Contains($"{sku.Code} · Active · Available 0 · Marketplace available 11 (on hand 15)", editPage);
 
             await AssertRedirectAsync(PlatformHttpTestHost.PostFormAsync(commerce, $"{offersAction}/{offer.Id}/archive",
                 catalogPage, new()), catalogPage);
@@ -96,14 +100,14 @@ public sealed class PlatformInventoryHttpTests
                 db.Set<InventoryBalance>().AsNoTracking().SingleAsync(b => b.OfferId == offer.Id);
 
             Task<StockBalance> FirstPartyStockAsync() =>
-                db.Set<StockBalance>().AsNoTracking().SingleAsync(b => b.SkuId == sku.Id);
+                db.Set<StockBalance>().AsNoTracking().SingleAsync(b => b.SkuId == firstPartySku.Id);
 
             async Task<string> InventoryHtmlAsync() => WebUtility.HtmlDecode(await eoffice.GetStringAsync(inventoryPage));
 
             Task AdjustFirstPartyAsync(string delta, string threshold) => AssertRedirectAsync(
                 PlatformHttpTestHost.PostFormAsync(eoffice, "/api/eoffice/inventory/stock", inventoryPage,
-                    new() { ["skuId"] = $"{sku.Id}", ["delta"] = delta, ["threshold"] = threshold, ["reason"] = "HKShop restock" }),
-                $"{inventoryPage}?sku={sku.Id}");
+                    new() { ["skuId"] = $"{firstPartySku.Id}", ["delta"] = delta, ["threshold"] = threshold, ["reason"] = "HKShop restock" }),
+                $"{inventoryPage}?sku={firstPartySku.Id}");
         }
         finally
         {
@@ -142,7 +146,7 @@ public sealed class PlatformInventoryHttpTests
         };
     }
 
-    private static async Task<(Product Product, Sku Sku, Sku AlternateSku, Seller Seller)> SeedCatalogAsync(
+    private static async Task<(Product Product, Sku Sku, Sku AlternateSku, Sku FirstPartySku, Seller Seller)> SeedCatalogAsync(
         ShopDbContext db, ShopUser owner)
     {
         var category = new Category { Name = "Inventory test apparel" };
@@ -158,17 +162,24 @@ public sealed class PlatformInventoryHttpTests
         var alternateSku = new Sku { Code = "INVENTORY-L", Size = "L", Color = "Black", PriceVnd = 100_000m, Active = true };
         var product = new Product
         {
-            CategoryId = category.Id, Name = "Inventory test shirt", Slug = "inventory-test-shirt",
+            SellerId = seller.Id, CategoryId = category.Id, Name = "Inventory test shirt", Slug = "inventory-test-shirt",
             Skus = [sku, alternateSku], Images = [new ProductImage { FileName = "inventory.webp", Alt = "Shirt" }]
         };
         product.Publish(category.Active);
-        db.Add(product);
+        var firstPartySku = new Sku { Code = "HK-INVENTORY", PriceVnd = 100_000m, Active = true };
+        var firstParty = new Product
+        {
+            CategoryId = category.Id, Name = "HKShop shirt", Slug = "inventory-hkshop-shirt",
+            Skus = [firstPartySku], Images = [new ProductImage { FileName = "inventory.webp", Alt = "Shirt" }]
+        };
+        firstParty.Publish(category.Active);
+        db.AddRange(product, firstParty);
         db.Add(new SellerMembership
         {
             SellerId = seller.Id, UserId = owner.Id, Email = owner.Email!, Role = SellerRole.Owner,
             Status = SellerMembershipStatus.Active
         });
         await db.SaveChangesAsync();
-        return (product, sku, alternateSku, seller);
+        return (product, sku, alternateSku, firstPartySku, seller);
     }
 }

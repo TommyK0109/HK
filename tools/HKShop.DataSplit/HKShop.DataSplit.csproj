@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="../../src/Services/HKShop.Notification/HKShop.Notification.csproj" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.7" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.15" />
+    <ProjectReference Include="../../src/Services/Identity/HKShop.Identity.Api/HKShop.Identity.Api.csproj" />
+    <ProjectReference Include="../../src/Services/Catalog/HKShop.Catalog.Api/HKShop.Catalog.Api.csproj" />
+    <ProjectReference Include="../../src/Services/Ordering/HKShop.Ordering.Api/HKShop.Ordering.Api.csproj" />
+    <ProjectReference Include="../../src/Services/Payments/HKShop.Payments.Api/HKShop.Payments.Api.csproj" />
+    <ProjectReference Include="../../src/Services/Shipping/HKShop.Shipping.Api/HKShop.Shipping.Api.csproj" />
+  </ItemGroup>
+</Project>

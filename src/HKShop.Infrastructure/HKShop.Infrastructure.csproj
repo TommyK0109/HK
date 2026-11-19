@@ -7,6 +7,7 @@
     <PackageReference Include="AWSSDK.S3" Version="4.1.0" />
     <PackageReference Include="Confluent.Kafka" Version="2.16.0" />
     <ProjectReference Include="../Shared/HKShop.Contracts/HKShop.Contracts.csproj" />
+    <ProjectReference Include="../BuildingBlocks/HKShop.ServiceDefaults/HKShop.ServiceDefaults.csproj" />
     <ProjectReference Include="../Commerce/HKShop.Commerce/HKShop.Commerce.csproj" />
     <ProjectReference Include="../EOffice/HKShop.EOffice/HKShop.EOffice.csproj" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

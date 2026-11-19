@@ -17,8 +17,8 @@ public sealed record SellerWorkspace(long Id, string Slug, string DisplayName, S
         SellerPermission.Workspace => true,
         SellerPermission.ManageTeam or SellerPermission.Audit => Status == SellerStatus.Active && Role == SellerRole.Owner,
         SellerPermission.Catalog => Status == SellerStatus.Active && Role is SellerRole.Owner or SellerRole.CatalogManager,
-        SellerPermission.Fulfillment => Status == SellerStatus.Active && Role is SellerRole.Owner or SellerRole.Fulfillment,
-        SellerPermission.Finance => Status == SellerStatus.Active && Role is SellerRole.Owner or SellerRole.Finance,
+        SellerPermission.Fulfillment => Status is SellerStatus.Active or SellerStatus.Closed && Role is SellerRole.Owner or SellerRole.Fulfillment,
+        SellerPermission.Finance => Status is SellerStatus.Active or SellerStatus.Closed && Role is SellerRole.Owner or SellerRole.Finance,
         _ => false
     };
 }
@@ -44,7 +44,7 @@ public static class SellerAccess
         from membership in db.Query<SellerMembership>()
         join seller in db.Query<Seller>() on membership.SellerId equals seller.Id
         where membership.UserId == userId && membership.Status == SellerMembershipStatus.Active &&
-            (sellerId == null || seller.Id == sellerId)
+            seller.Status != SellerStatus.Pending && (sellerId == null || seller.Id == sellerId)
         orderby seller.DisplayName, seller.Id
         select new SellerWorkspace(seller.Id, seller.Slug, seller.DisplayName, seller.Status, membership.Role);
 }
@@ -55,29 +55,6 @@ public sealed record SellerTeam(IReadOnlyList<SellerTeamMember> Memberships, IRe
 
 public sealed class SellerService(IShopStore store, TimeProvider time)
 {
-    public Task<long> Register(ShopActor actor, string displayName, string slug)
-    {
-        actor.RequireCustomer();
-        displayName = ShopRules.Text(displayName, 100, "Seller Name");
-        slug = ShopRules.Text(slug, 64, "Seller Slug").ToLowerInvariant();
-        if (slug.Length < 3 || slug.StartsWith('-') || slug.EndsWith('-') || slug.Contains("--", StringComparison.Ordinal) ||
-            slug.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '-'))
-            throw new ShopRuleException("Seller slug must be 3 to 64 characters long, containing only letters, numbers, or hyphens.");
-
-        return store.Write(async db =>
-        {
-            if (await db.First(db.Query<Seller>().Where(s => s.Slug == slug)) is not null)
-                throw new ShopRuleException("Seller slug is already in use.");
-            var now = time.GetUtcNow();
-            var seller = new Seller { Slug = slug, DisplayName = displayName, Status = SellerStatus.Pending, CreatedAt = now };
-            db.Add(seller);
-            await db.Save();
-            db.Add(new SellerMembership { SellerId = seller.Id, UserId = actor.UserId, Email = actor.Email, Role = SellerRole.Owner });
-            db.Audit(actor.UserId, "Đăng ký gian hàng", Key(seller.Id), now, sellerId: seller.Id);
-            return seller.Id;
-        });
-    }
-
     public Task<List<SellerWorkspace>> Mine(ShopActor actor)
     {
         SellerAccess.RequireMfa(actor);
@@ -90,7 +67,7 @@ public sealed class SellerService(IShopStore store, TimeProvider time)
         return store.Read(async db =>
         {
             const int size = 25;
-            var sellers = db.Query<Seller>();
+            var sellers = db.Query<Seller>().Where(s => s.Status != SellerStatus.Pending);
             var owners = db.Query<SellerMembership>().Where(m => m.Role == SellerRole.Owner);
             var count = await db.Count(sellers);
             var number = Math.Clamp(page, 1, Math.Max(1, (int)Math.Ceiling(count / (double)size)));
@@ -112,7 +89,6 @@ public sealed class SellerService(IShopStore store, TimeProvider time)
             if (seller.Status == status) return false;
             var action = (seller.Status, status) switch
             {
-                (SellerStatus.Pending, SellerStatus.Active) => "Duyệt gian hàng",
                 (SellerStatus.Suspended, SellerStatus.Active) => "Khôi phục gian hàng",
                 (SellerStatus.Active, SellerStatus.Suspended) when sellerId != Seller.FirstPartyId => "Tạm ngưng gian hàng",
                 _ => throw new ShopRuleException("The store status cannot be changed.")

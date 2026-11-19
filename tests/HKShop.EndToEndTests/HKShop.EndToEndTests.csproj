@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.14" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" PrivateAssets="all" />
+    <ProjectReference Include="../../src/Shared/HKShop.Contracts/HKShop.Contracts.csproj" />
+    <ProjectReference Include="../../src/BuildingBlocks/HKShop.ServiceDefaults/HKShop.ServiceDefaults.csproj" />
+    <ProjectReference Include="../../src/BuildingBlocks/HKShop.Messaging/HKShop.Messaging.csproj" />
+    <ProjectReference Include="../../src/HKShop.Web/HKShop.Web.csproj" />
+    <ProjectReference Include="../../src/Services/Identity/HKShop.Identity.Api/HKShop.Identity.Api.csproj" />
+    <ProjectReference Include="../../src/Services/Catalog/HKShop.Catalog.Api/HKShop.Catalog.Api.csproj" />
+    <ProjectReference Include="../../src/Services/Shipping/HKShop.Shipping.Api/HKShop.Shipping.Api.csproj" />
+    <ProjectReference Include="../../src/Services/Payments/HKShop.Payments.Api/HKShop.Payments.Api.csproj" />
+    <ProjectReference Include="../../src/Services/Ordering/HKShop.Ordering.Api/HKShop.Ordering.Api.csproj" />
+    <ProjectReference Include="../../src/Services/HKShop.Notification/HKShop.Notification.csproj" />
+  </ItemGroup>
+</Project>

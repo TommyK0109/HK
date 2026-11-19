@@ -34,7 +34,7 @@ namespace HKShop.Application.Settlement
 namespace HKShop.Application.Sellers
 {
     public sealed record PlatformSeller(long Id, string Slug, string DisplayName, SellerStatus Status, DateTimeOffset CreatedAt, string? OwnerEmail);
-    public sealed record OfferReviewRow(long Id, string Seller, string Product, string Variant, string Code, decimal? PriceVnd);
+    public sealed record OfferReviewRow(long Id, string Seller, string Product, string Variant, string Code, decimal? PriceVnd, int ProductId);
     public sealed record ProductProposalReview(long Id, string Seller, string Name, string Slug, string Description, string Category);
     public sealed record MarketplaceModeration(Page<OfferReviewRow> Offers, Page<ProductProposalReview> Proposals);
 }

@@ -22,6 +22,11 @@ else
     {
         <p class="message" role="status">Waiting for confirmation from SePay. <a href="/orders/@order.Id">Refresh status</a></p>
     }
+    else if (order.Status == OrderStatus.AwaitingPayment && hosted is null && order.Payment.Method == PaymentMethod.SePay &&
+             order.PaymentDeadline > Clock.GetUtcNow())
+    {
+        <p class="message" role="status">Preparing your order and payment session. <a href="/orders/@order.Id">Refresh status</a></p>
+    }
     <div class="split">
         <section class="panel">
             @if (order.SellerOrders.Count > 0)
@@ -203,7 +208,7 @@ else
             }
         </aside>
     </div>
-    <OrderReturns Details="details" AdminView="false" Now="Clock.GetUtcNow()" />
+    <OrderReturns Details="details" Now="Clock.GetUtcNow()" />
 }
 
 @code {
@@ -223,8 +228,9 @@ else
             return;
         }
         var order = details.Order;
-        if (Payments.OnlineAvailable && order.Status == OrderStatus.AwaitingPayment &&
-            order.PaymentDeadline > Clock.GetUtcNow())
+        if (order.Status == OrderStatus.AwaitingPayment &&
+            order.PaymentDeadline > Clock.GetUtcNow() &&
+            await Payments.IsOnlineAvailableAsync())
         {
             try { hosted = await Payments.Form(actor, Id); }
             catch (ShopRuleException) { }

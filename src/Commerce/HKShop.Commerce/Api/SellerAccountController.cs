@@ -19,14 +19,6 @@ public sealed class SellerAccountController(
     ShopSettings settings,
     IWebHostEnvironment environment) : Controller
 {
-    [HttpPost("register"), Authorize(Policy = ShopPolicies.CommerceCustomer), EnableRateLimiting("CustomerWrites")]
-    public async Task<IActionResult> Register([FromForm] string displayName, [FromForm] string slug)
-    {
-        await sellers.Register(await request.Actor(), displayName, slug);
-        TempData["Notice"] = "Registration submitted. HKShop will review your store.";
-        return Redirect("/seller");
-    }
-
     [HttpPost("{sellerId:long}/invite"), Authorize(Policy = ShopPolicies.CommerceSeller), EnableRateLimiting("CustomerWrites")]
     public async Task<IActionResult> Invite([FromRoute] long sellerId, [FromForm] string email, [FromForm] SellerRole role)
     {

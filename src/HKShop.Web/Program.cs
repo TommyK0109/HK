@@ -1,7 +1,4 @@
-using System.Diagnostics;
 using System.Globalization;
-using System.Security.Claims;
-using System.Threading.RateLimiting;
 using HKShop.Application;
 using HKShop.Application.Catalog;
 using HKShop.Application.Checkout;
@@ -25,34 +22,16 @@ using HKShop.Infrastructure.Media;
 using HKShop.Infrastructure.Payments;
 using HKShop.Infrastructure.Persistence;
 using HKShop.Infrastructure.Transportation;
+using HKShop.ServiceDefaults;
 using HKShop.Web;
 using HKShop.Web.Components;
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection;
-using Microsoft.AspNetCore.Diagnostics.HealthChecks;
-using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
-using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddSerilog((services, loggerConfig) =>
-{
-    loggerConfig
-        .ReadFrom.Configuration(builder.Configuration)
-        .ReadFrom.Services(services)
-        .Enrich.FromLogContext()
-        .Enrich.WithProperty("Application", "HKShop")
-        .Enrich.WithProperty("Environment", builder.Environment.EnvironmentName);
-
-    var seqUrl = builder.Configuration["Seq:ServerUrl"];
-    if (!string.IsNullOrWhiteSpace(seqUrl))
-    {
-        var seqApiKey = builder.Configuration["Seq:ApiKey"];
-        loggerConfig.WriteTo.Seq(seqUrl, apiKey: string.IsNullOrWhiteSpace(seqApiKey) ? null : seqApiKey);
-    }
-});
+builder.AddHKShopDefaults("HKShop");
 var shop = builder.Configuration.GetSection("Shop").Get<ShopSettings>() ?? new();
 shop.MediaPath = Path.GetFullPath(shop.MediaPath, builder.Environment.ContentRootPath);
 shop.KeysPath = Path.GetFullPath(shop.KeysPath, builder.Environment.ContentRootPath);
@@ -114,6 +93,11 @@ builder.Services.ConfigureApplicationCookie(options =>
         context.Response.Redirect(QueryHelpers.AddQueryString(deniedBase, "returnUrl", returnUrl));
         return Task.CompletedTask;
     };
+    if (!string.IsNullOrWhiteSpace(builder.Configuration["Services:Identity:BaseUrl"]) &&
+        builder.Configuration.GetValue("Identity:UseJwtAuth", false))
+    {
+        options.Events.OnValidatePrincipal = _ => Task.CompletedTask;
+    }
 });
 builder.Services.Configure<SecurityStampValidatorOptions>(options =>
 {
@@ -127,46 +111,7 @@ builder.Services.Configure<SecurityStampValidatorOptions>(options =>
     };
 });
 
-builder.Services.AddSingleton<IAuthorizationHandler, ShopPlatformAuthorizationHandler>();
-builder.Services.AddAuthorization(options =>
-{
-    options.AddPolicy(ShopPolicies.CommerceCustomer, policy => policy
-        .RequireAuthenticatedUser()
-        .AddRequirements(new ShopPlatformRequirement(actor => actor.UserId.Length > 0 && !actor.IsEmployee)));
-    options.AddPolicy(ShopPolicies.CommerceSeller, policy => policy
-        .RequireAuthenticatedUser()
-        .RequireClaim("amr", "mfa")
-        .AddRequirements(new ShopPlatformRequirement(actor => actor.UserId.Length > 0 && actor.Mfa && !actor.IsEmployee)));
-    options.AddPolicy(ShopPolicies.EOfficeAny, policy => policy
-        .RequireAuthenticatedUser()
-        .AddRequirements(new ShopPlatformRequirement(actor => actor.UserId.Length > 0 && actor.HasEmployeeRole)));
-    options.AddPolicy(ShopPolicies.EOfficeStaff, policy => policy
-        .RequireRole("StoreStaff", "Admin")
-        .RequireClaim("amr", "mfa")
-        .AddRequirements(new ShopPlatformRequirement(actor => actor.Mfa && (actor.Staff || actor.Admin))));
-    options.AddPolicy(ShopPolicies.EOfficeAdmin, policy => policy
-        .RequireRole("Admin")
-        .RequireClaim("amr", "mfa")
-        .AddRequirements(new ShopPlatformRequirement(actor => actor.Mfa && actor.Admin)));
-    options.AddPolicy(ShopPolicies.EOfficeShipper, policy => policy
-        .RequireAuthenticatedUser()
-        .RequireClaim("amr", "mfa")
-        .AddRequirements(new ShopPlatformRequirement(actor => actor.Mfa && actor.Shipper)));
-
-    // Legacy policy aliases
-    options.AddPolicy("Staff", policy => policy
-        .RequireRole("StoreStaff", "Admin")
-        .RequireClaim("amr", "mfa"));
-    options.AddPolicy("Admin", policy => policy
-        .RequireRole("Admin")
-        .RequireClaim("amr", "mfa"));
-    options.AddPolicy("SellerMfa", policy => policy
-        .RequireAuthenticatedUser()
-        .RequireClaim("amr", "mfa"));
-});
-
 builder.Services.AddDataProtection().SetApplicationName("HKShop").PersistKeysToFileSystem(new DirectoryInfo(shop.KeysPath));
-builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<IShopUserResolver, ShopUserResolver>();
 builder.Services.AddScoped<ShopRequest>();
 builder.Services.AddScoped<IShopRequestContext>(sp => sp.GetRequiredService<ShopRequest>());
@@ -180,17 +125,37 @@ builder.Services.AddScoped<IShopStore, SqlShopStore>();
 // Commerce services & port adapters
 builder.Services.AddScoped<CatalogService>();
 builder.Services.AddScoped<InventoryService>();
-builder.Services.AddScoped<CartService>();
-builder.Services.AddScoped<AddressService>();
+builder.Services.AddScoped<CartService>(sp =>
+    new CartService(sp.GetRequiredService<IShopStore>(), sp.GetRequiredService<TimeProvider>()));
+builder.Services.AddScoped<AddressService>(sp =>
+    new AddressService(sp.GetRequiredService<IShopStore>()));
 builder.Services.AddScoped<PromotionService>();
-builder.Services.AddScoped<CheckoutService>();
-builder.Services.AddScoped<OrderService>();
-builder.Services.AddScoped<PaymentService>();
+builder.Services.AddScoped<CheckoutService>(sp =>
+    new CheckoutService(
+        sp.GetRequiredService<IShopStore>(),
+        sp.GetRequiredService<ShopSettings>(),
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetService<TransportSettings>(),
+        sp.GetService<ITransportRouting>(),
+        sp.GetService<IShippingGateway>()));
+builder.Services.AddScoped<OrderService>(sp =>
+    new OrderService(
+        sp.GetRequiredService<IShopStore>(),
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetService<IShippingGateway>()));
+builder.Services.AddScoped<PaymentService>(sp =>
+    new PaymentService(
+        sp.GetRequiredService<IShopStore>(),
+        sp.GetRequiredService<IPaymentGateway>(),
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetService<IShippingGateway>()));
 builder.Services.AddScoped<RefundWorkflow>();
 builder.Services.AddScoped<IRefundGateway, SePayRefundGateway>();
 builder.Services.AddScoped<ReturnService>();
 builder.Services.AddScoped<ReportingService>();
 builder.Services.AddScoped<SellerService>();
+builder.Services.AddScoped<StoreApplications>();
+builder.Services.AddScoped<IStoreApplicationReview>(sp => sp.GetRequiredService<StoreApplications>());
 builder.Services.AddScoped<SellerCatalogService>();
 builder.Services.AddScoped<SettlementLedger>();
 builder.Services.AddScoped<PayoutService>();
@@ -205,6 +170,7 @@ builder.Services.AddScoped<TransportService>();
 builder.Services.AddScoped<ShippingGatewayAdapter>();
 builder.Services.AddScoped<IShippingGateway>(sp => sp.GetRequiredService<ShippingGatewayAdapter>());
 builder.Services.AddScoped<IShippingAdminPort>(sp => sp.GetRequiredService<ShippingGatewayAdapter>());
+builder.Services.AddScoped<IShippingShipperPort>(sp => sp.GetRequiredService<ShippingGatewayAdapter>());
 builder.Services.AddHttpClient<ITransportRouting, OsrmRouting>(client => client.Timeout = TimeSpan.FromSeconds(4));
 
 builder.Services.AddSingleton<ICurrencyExchangeRateProvider, DefaultExchangeRateProvider>();
@@ -225,12 +191,20 @@ builder.Services.AddHttpClient<SePayGateway>(client => client.Timeout = TimeSpan
 builder.Services.AddScoped<IPaymentGateway>(s => s.GetRequiredService<SePayGateway>());
 builder.Services.AddScoped<ISePayWebhookHandler>(s => s.GetRequiredService<SePayGateway>());
 
-builder.Services.AddHostedService<CommerceMaintenanceWorker>();
-builder.Services.AddHostedService<ShippingDispatchWorker>();
-builder.Services.AddHostedService<EmailOutboxWorker>();
-builder.Services.AddKafkaCheckout(builder.Configuration);
-builder.Services.AddScoped<ICheckoutRequestDispatcher>(sp => sp.GetRequiredService<CheckoutRequests>());
-builder.Services.AddHealthChecks().AddCheck<DatabaseReadiness>("sql", tags: ["ready"]);
+if (string.IsNullOrWhiteSpace(builder.Configuration["Services:Payments:BaseUrl"]) &&
+    string.IsNullOrWhiteSpace(builder.Configuration["Services:Ordering:BaseUrl"]))
+    builder.Services.AddHostedService<CommerceMaintenanceWorker>();
+if (string.IsNullOrWhiteSpace(builder.Configuration["Services:Shipping:BaseUrl"]))
+    builder.Services.AddHostedService<ShippingDispatchWorker>();
+if (!builder.Configuration.GetValue("Notification:RetireLegacyEmailWorker", false))
+    builder.Services.AddHostedService<EmailOutboxWorker>();
+if (string.IsNullOrWhiteSpace(builder.Configuration["Services:Ordering:BaseUrl"]))
+{
+    builder.Services.AddKafkaCheckout(builder.Configuration);
+    builder.Services.AddScoped<ICheckoutRequestDispatcher>(sp => sp.GetRequiredService<CheckoutRequests>());
+}
+builder.Services.AddHKShopBffClients(builder.Configuration);
+builder.Services.AddHealthChecks().AddHKShopDbReadiness<ShopDbContext>("sql");
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddControllersWithViews(options =>
@@ -241,20 +215,6 @@ builder.Services.AddControllersWithViews(options =>
 .AddApplicationPart(typeof(CommerceAssemblyMarker).Assembly)
 .AddApplicationPart(typeof(EOfficeAssemblyMarker).Assembly);
 
-builder.Services.AddRateLimiter(options =>
-{
-    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.AddPolicy("CustomerWrites", context => RateLimitPartition.GetFixedWindowLimiter(
-        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-        _ => new FixedWindowRateLimiterOptions { PermitLimit = 30, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
-});
-builder.Services.Configure<ForwardedHeadersOptions>(options =>
-{
-    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-    if (System.Net.IPAddress.TryParse(builder.Configuration["Proxy:KnownProxy"], out var proxy))
-        options.KnownProxies.Add(proxy);
-});
-
 CultureInfo.DefaultThreadCurrentCulture = CultureInfo.GetCultureInfo("vi-VN");
 CultureInfo.DefaultThreadCurrentUICulture = CultureInfo.GetCultureInfo("en");
 
@@ -262,42 +222,11 @@ var app = builder.Build();
 app.UseForwardedHeaders();
 app.UseExceptionHandler("/error", createScopeForErrors: true);
 if (!app.Environment.IsDevelopment()) app.UseHsts();
-app.UseHttpsRedirection();
-app.Use(async (context, next) =>
-{
-    context.Response.Headers["X-Content-Type-Options"] = "nosniff";
-    context.Response.Headers["Referrer-Policy"] = "same-origin";
-    if (context.Request.Path.StartsWithSegments("/account") || context.Request.Path.StartsWithSegments("/checkout")
-        || context.Request.Path.StartsWithSegments("/cart") || context.Request.Path.StartsWithSegments("/orders")
-        || context.Request.Path.StartsWithSegments("/eoffice") || context.Request.Path.StartsWithSegments("/admin")
-        || context.Request.Path.StartsWithSegments("/payments") || context.Request.Path.StartsWithSegments("/seller")
-        || context.Request.Path.StartsWithSegments("/shipper") || context.Request.Path.StartsWithSegments("/api"))
-        context.Response.Headers.CacheControl = "no-store";
-    await next();
-});
+if (app.Configuration.GetValue("HttpsRedirection:Enabled", true))
+    app.UseHttpsRedirection();
+app.UseHKShopSecurityHeaders();
 app.UseStatusCodePagesWithReExecute("/status/{0}", createScopeForStatusCodePages: true);
-var httpLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("HKShop.Http");
-app.Use(async (context, next) =>
-{
-    var started = Stopwatch.GetTimestamp();
-    var route = (context.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText;
-    await next();
-    var path = context.Request.Path;
-    var isApi = path.StartsWithSegments("/api") || path.StartsWithSegments("/payments");
-    if (!path.StartsWithSegments("/health") && (route is not null || isApi))
-    {
-        var statusCode = context.Response.StatusCode;
-        var level = statusCode >= 500 ? LogLevel.Error
-            : statusCode >= 400 ? LogLevel.Warning
-            : LogLevel.Information;
-        var userId = context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "anonymous";
-        httpLogger.Log(level,
-            "{LogSource} {Method} {Route} ({Path}) returned {StatusCode} in {ElapsedMs} ms for {UserId} ({TraceId}) [ReqBytes={RequestBytes}, ResType={ResponseContentType}].",
-            isApi ? "Api" : "Http", context.Request.Method, route ?? (path.Value ?? "/"), path.Value ?? "/",
-            statusCode, Math.Round(Stopwatch.GetElapsedTime(started).TotalMilliseconds, 1), userId,
-            context.TraceIdentifier, context.Request.ContentLength, context.Response.ContentType);
-    }
-});
+app.UseHKShopRequestLogging();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();
@@ -307,8 +236,8 @@ app.MapControllers();
 app.MapRazorComponents<App>()
     .AddAdditionalAssemblies(typeof(CommerceAssemblyMarker).Assembly, typeof(EOfficeAssemblyMarker).Assembly)
     .AddInteractiveServerRenderMode();
-app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false }).AllowAnonymous();
-app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = check => check.Tags.Contains("ready") }).AllowAnonymous();
+app.MapHKShopHealthChecks();
+app.MapHKShopBffCompositionEndpoints();
 app.MapGet("/media/{name}", async (string name, IProductImageStore media, HttpContext context, CancellationToken cancellationToken) =>
 {
     var image = await media.OpenRead(name, cancellationToken);

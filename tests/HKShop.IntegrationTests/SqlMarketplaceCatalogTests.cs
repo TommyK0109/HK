@@ -61,7 +61,7 @@ public sealed class SqlMarketplaceCatalogTests
     }
 
     [SqlFact]
-    public async Task MultipleSellersCanListSameVariantWithIndependentPricingAndStock()
+    public async Task CatalogHidesLegacyOffersForProductsOwnedByAnotherStore()
     {
         var factory = SqlTestDatabase.Create();
         await using var context = factory.CreateDbContext();
@@ -127,33 +127,13 @@ public sealed class SqlMarketplaceCatalogTests
             context.Add(new InventoryBalance { SellerId = sellerB.Id, OfferId = offerB.Id, LocationId = locB.Id, OnHand = 5, Reserved = 0 });
             await context.SaveChangesAsync();
 
-            // 5. Kiểm tra CatalogService.Details: Cả 2 offer đều Active và ưu tiên giá thấp hơn
             var catalogService = new CatalogService(store, new UnusedImageStore(), TimeProvider.System);
             var details = await catalogService.Details(product.Slug);
             Assert.NotNull(details);
-            Assert.Equal(2, details.Offers.Count);
-
-            // Ưu tiên offer giá thấp hơn lên đầu (Seller B: 180k)
-            Assert.Equal(offerB.Id, details.Offers[0].Id);
-            Assert.Equal("Shop B", details.Offers[0].SellerName);
-            Assert.Equal(180_000m, details.Offers[0].Price);
-            Assert.Equal(5, details.Offers[0].Available);
-
-            // Offer của Seller A xếp thứ hai (200k)
-            Assert.Equal(offerA.Id, details.Offers[1].Id);
-            Assert.Equal("Shop A", details.Offers[1].SellerName);
-            Assert.Equal(200_000m, details.Offers[1].Price);
-            Assert.Equal(10, details.Offers[1].Available);
-
-            // 6. Đình chỉ Seller B -> Offer B tự động biến mất khỏi Storefront
-            sellerB.Status = SellerStatus.Suspended;
-            await context.SaveChangesAsync();
-
-            var updatedDetails = await catalogService.Details(product.Slug);
-            Assert.NotNull(updatedDetails);
-            var single = Assert.Single(updatedDetails.Offers);
-            Assert.Equal(offerA.Id, single.Id);
-            Assert.Equal("Shop A", single.SellerName);
+            var firstParty = Assert.Single(details.Offers);
+            Assert.Equal("HKShop", firstParty.SellerName);
+            Assert.Equal(150_000m, firstParty.Price);
+            Assert.DoesNotContain(details.Offers, offer => offer.Id == offerA.Id || offer.Id == offerB.Id);
         }
         finally
         {

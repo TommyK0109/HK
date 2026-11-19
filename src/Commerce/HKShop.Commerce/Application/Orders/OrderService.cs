@@ -2,6 +2,7 @@ using HKShop.Application.Catalog;
 using HKShop.Application.Payments;
 using HKShop.Application.Sellers;
 using HKShop.Application.Settlement;
+using HKShop.Contracts.Clients;
 using HKShop.Contracts.Ports;
 using HKShop.Domain;
 using HKShop.Domain.Orders;
@@ -19,13 +20,30 @@ public sealed record SellerOrderListRow(SellerOrder SellerOrder, string OrderNum
 public sealed record SellerOrderDetails(SellerOrder SellerOrder, string OrderNumber, string Recipient, string Phone,
     string ShippingAddress, PaymentMethod PaymentMethod, IReadOnlyList<OrderItem> Items);
 
-public sealed class OrderService(IShopStore store, TimeProvider time, IShippingGateway? shipping = null)
+public sealed class OrderService(
+    IShopStore store,
+    TimeProvider time,
+    IShippingGateway? shipping = null,
+    OrderingServiceClient? remoteOrdering = null,
+    PaymentsServiceClient? remotePayments = null)
 {
-    public Task<Page<Order>> List(ShopActor actor, bool adminView, OrderStatus? status, int page)
+    public async Task<Page<Order>> List(ShopActor actor, bool adminView, OrderStatus? status, int page)
     {
         if (adminView) actor.RequireStaff();
         else actor.RequireCustomer();
-        return store.Read(async db =>
+        if (remoteOrdering is not null)
+        {
+            var result = adminView
+                ? await remoteOrdering.ListOrdersAsync(status, page)
+                : await remoteOrdering.ListMyOrdersAsync(status, page);
+            return new Page<Order>(
+                result.Items.Select(o => new Order
+                {
+                    Id = o.Id, Number = o.Number, CreatedAt = o.CreatedAt, Status = o.Status, TotalVnd = o.TotalVnd
+                }).ToList(),
+                result.Number, result.Total, result.Size);
+        }
+        return await store.Read(async db =>
         {
             var query = db.Query<Order>().Where(o => (adminView || o.CustomerId == actor.UserId)
                 && (status == null || o.Status == status));
@@ -36,10 +54,83 @@ public sealed class OrderService(IShopStore store, TimeProvider time, IShippingG
         });
     }
 
-    public Task<OrderDetails?> Details(ShopActor actor, Guid id, bool adminView = false)
+    public async Task<OrderDetails?> Details(ShopActor actor, Guid id, bool adminView = false)
     {
         if (adminView) actor.RequireStaff();
-        return store.Read(async db =>
+        if (remoteOrdering is not null)
+        {
+            var dto = await remoteOrdering.GetOrderDetailsAsync(id);
+            if (dto is null) return null;
+            var pay = remotePayments is not null ? await remotePayments.GetOrderPaymentDetailsAsync(id) : null;
+            var childIds = dto.SellerOrders.Select(s => s.Id).ToArray();
+            var parcels = shipping is null || childIds.Length == 0
+                ? new Dictionary<Guid, TransportParcelSummary>()
+                : await shipping.GetParcelSummariesAsync(null!, childIds, redactDeliveryCode: adminView);
+
+            var order = new Order
+            {
+                Id = dto.Id, SellerId = dto.SellerId, Number = dto.Number, CustomerId = dto.CustomerId,
+                CustomerEmail = dto.CustomerEmail, CreatedAt = dto.CreatedAt, DeliveredAt = dto.DeliveredAt,
+                PaymentDeadline = dto.PaymentDeadline, Status = dto.Status, PaymentStatus = dto.PaymentStatus,
+                Recipient = dto.Recipient, Phone = dto.Phone, ShippingAddress = dto.ShippingAddress,
+                ShippingVnd = dto.ShippingVnd, TotalVnd = dto.TotalVnd,
+                Payment = pay?.Payment is { } p
+                    ? new Payment { OrderId = p.OrderId, Method = p.Method, Status = p.Status, AmountVnd = p.AmountVnd, Issue = p.Issue }
+                    : new Payment { OrderId = dto.Id, Method = dto.PaymentMethod, Status = dto.PaymentStatus, AmountVnd = dto.TotalVnd },
+                SellerOrders = dto.SellerOrders.Select(so => new SellerOrder
+                {
+                    Id = so.Id, OrderId = so.OrderId, SellerId = so.SellerId, Number = so.Number, Status = so.Status,
+                    SubtotalVnd = so.SubtotalVnd, SellerDiscountVnd = so.SellerDiscountVnd, PlatformDiscountVnd = so.PlatformDiscountVnd,
+                    ShippingVnd = so.ShippingVnd, TotalVnd = so.TotalVnd, CommissionVnd = so.CommissionVnd,
+                    CreatedAt = so.CreatedAt, DeliveredAt = so.DeliveredAt,
+                    Shipment = so.Shipment is null ? null : new Shipment
+                    {
+                        SellerOrderId = so.Shipment.SellerOrderId, OrderId = so.Shipment.OrderId,
+                        Carrier = so.Shipment.Carrier, TrackingNumber = so.Shipment.TrackingNumber, DispatchedAt = so.Shipment.DispatchedAt
+                    },
+                    Transport = parcels.GetValueOrDefault(so.Id)
+                }).ToList(),
+                Items = dto.Items.Select(i => new OrderItem
+                {
+                    Id = i.Id, OrderId = i.OrderId, SellerOrderId = i.SellerOrderId, SellerId = i.SellerId,
+                    SkuId = i.SkuId, OfferId = i.OfferId, SkuCode = i.SkuCode, SellerSkuCode = i.SellerSkuCode,
+                    Name = i.Name, Quantity = i.Quantity, UnitPriceVnd = i.UnitPriceVnd, DiscountVnd = i.DiscountVnd
+                }).ToList(),
+                Events = dto.Events.Select(e => new OrderEvent
+                {
+                    Id = e.Id, OrderId = dto.Id, Status = e.Status, OccurredAt = e.OccurredAt, Note = e.Note
+                }).ToList(),
+                PaymentAttempts = pay?.Attempts.Select(a => new PaymentAttempt
+                {
+                    Id = a.Id, OrderId = a.OrderId, SellerOrderId = a.SellerOrderId, AttemptNumber = a.AttemptNumber,
+                    Method = a.Method, Status = a.Status, AmountVnd = a.AmountVnd, CapturedAmountVnd = a.CapturedAmountVnd,
+                    ProviderInvoice = a.ProviderInvoice, ProviderTransaction = a.ProviderTransaction,
+                    AppliedToOrder = a.AppliedToOrder, Issue = a.Issue
+                }).ToList() ?? []
+            };
+            if (order.SellerOrders.Count == 1) order.Shipment = order.SellerOrders[0].Shipment;
+            var returns = dto.Returns.Select(r => new ReturnRequest
+            {
+                Id = r.Id, OrderId = r.OrderId, SellerOrderId = r.SellerOrderId, Status = r.Status,
+                Reason = r.Reason, StaffNote = r.StaffNote, RequestedAt = r.RequestedAt,
+                Items = r.Items.Select(i => new ReturnItem
+                {
+                    Id = i.Id, ReturnId = i.ReturnId, SellerOrderId = i.SellerOrderId, OrderItemId = i.OrderItemId,
+                    Requested = i.Requested, Accepted = i.Accepted, Restocked = i.Restocked
+                }).ToList()
+            }).ToList();
+            var refunds = pay?.Refunds.Select(r => new Refund
+            {
+                Id = r.Id, OrderId = r.OrderId, PaymentAttemptId = r.PaymentAttemptId, SellerOrderId = r.SellerOrderId,
+                ReturnId = r.ReturnId, BusinessKey = r.BusinessKey, AmountVnd = r.AmountVnd, ShippingVnd = r.ShippingVnd,
+                Status = r.Status, Simulated = r.Simulated, Reference = r.Reference, ProviderReference = r.ProviderReference,
+                Issue = r.Issue, NextAttemptAt = r.NextAttemptAt, RequestedAt = r.RequestedAt, CompletedAt = r.CompletedAt
+            }).ToList() ?? [];
+            var sellerNames = order.SellerOrders.Select(s => s.SellerId).Distinct()
+                .ToDictionary(sid => sid, sid => sid == Seller.FirstPartyId ? "HKShop" : $"Seller #{sid}");
+            return new OrderDetails(order, returns, refunds, sellerNames);
+        }
+        return await store.Read(async db =>
         {
             var order = await db.First(db.Query<Order>().Where(o => o.Id == id && (adminView || o.CustomerId == actor.UserId)));
             if (order is null) return null;
@@ -102,12 +193,17 @@ public sealed class OrderService(IShopStore store, TimeProvider time, IShippingG
                 showAddress ? order.ShippingAddress : "", payment.Method, items);
         });
 
-    public Task<int> Cancel(ShopActor actor, Guid id, string reason, bool adminView = false)
+    public async Task<int> Cancel(ShopActor actor, Guid id, string reason, bool adminView = false)
     {
         if (adminView) actor.RequireStaff();
         else actor.RequireCustomer();
         reason = ShopRules.Text(reason, 250, "Cancellation reason", false);
-        return store.Write(async db =>
+        if (remoteOrdering is not null)
+        {
+            await remoteOrdering.CancelOrderAsync(id, reason);
+            return 0;
+        }
+        return await store.Write(async db =>
         {
             var order = await FindOrder(db, id, adminView ? null : actor.UserId);
             if (order.Status == OrderStatus.Cancelled) return 0;
@@ -137,29 +233,55 @@ public sealed class OrderService(IShopStore store, TimeProvider time, IShippingG
     public Task<int> StartPacking(ShopActor actor, Guid id) =>
         ApplyToOnlySellerOrder(actor, id, (db, order, child, now) => Pack(db, actor, order, child, now));
 
-    public Task<Guid> StartPackingSellerOrder(ShopActor actor, Guid sellerOrderId, long? sellerId = null) =>
-        UpdateFulfillment(actor, sellerOrderId, sellerId, (db, order, child, now) => Pack(db, actor, order, child, now));
+    public async Task<Guid> StartPackingSellerOrder(ShopActor actor, Guid sellerOrderId, long? sellerId = null)
+    {
+        if (remoteOrdering is not null)
+        {
+            await remoteOrdering.PackSellerOrderAsync(sellerOrderId, sellerId);
+            return sellerOrderId;
+        }
+        return await UpdateFulfillment(actor, sellerOrderId, sellerId, (db, order, child, now) => Pack(db, actor, order, child, now));
+    }
 
-    public Task<Guid> CancelSellerOrder(ShopActor actor, Guid sellerOrderId, string reason, long? sellerId = null)
+    public async Task<Guid> CancelSellerOrder(ShopActor actor, Guid sellerOrderId, string reason, long? sellerId = null)
     {
         reason = ShopRules.Text(reason, 250, "Cancellation reason", false);
-        return UpdateFulfillment(actor, sellerOrderId, sellerId, (db, order, child, now) =>
+        if (remoteOrdering is not null)
+        {
+            await remoteOrdering.CancelSellerOrderAsync(sellerOrderId, reason, sellerId);
+            return sellerOrderId;
+        }
+        return await UpdateFulfillment(actor, sellerOrderId, sellerId, (db, order, child, now) =>
             CancelChild(db, order, child, now, actor.UserId, reason, shipping));
     }
 
     public Task<int> Dispatch(ShopActor actor, Guid id, string carrier, string tracking) =>
         ApplyToOnlySellerOrder(actor, id, (db, order, child, now) => Dispatch(db, actor, order, child, carrier, tracking, now, shipping: shipping));
 
-    public Task<Guid> DispatchSellerOrder(ShopActor actor, Guid sellerOrderId, string carrier, string tracking, long? sellerId = null) =>
-        UpdateFulfillment(actor, sellerOrderId, sellerId,
+    public async Task<Guid> DispatchSellerOrder(ShopActor actor, Guid sellerOrderId, string carrier, string tracking, long? sellerId = null)
+    {
+        if (remoteOrdering is not null)
+        {
+            await remoteOrdering.DispatchSellerOrderAsync(sellerOrderId, carrier, tracking, sellerId);
+            return sellerOrderId;
+        }
+        return await UpdateFulfillment(actor, sellerOrderId, sellerId,
             (db, order, child, now) => Dispatch(db, actor, order, child, carrier, tracking, now, shipping: shipping));
+    }
 
     public Task<int> Deliver(ShopActor actor, Guid id, decimal? collected, string reference) =>
         ApplyToOnlySellerOrder(actor, id, (db, order, child, now) => Deliver(db, actor, order, child, collected, reference, now, shipping: shipping));
 
-    public Task<Guid> DeliverSellerOrder(ShopActor actor, Guid sellerOrderId, decimal? collected, string reference, long? sellerId = null) =>
-        UpdateFulfillment(actor, sellerOrderId, sellerId,
+    public async Task<Guid> DeliverSellerOrder(ShopActor actor, Guid sellerOrderId, decimal? collected, string reference, long? sellerId = null)
+    {
+        if (remoteOrdering is not null)
+        {
+            await remoteOrdering.DeliverSellerOrderAsync(sellerOrderId, sellerId);
+            return sellerOrderId;
+        }
+        return await UpdateFulfillment(actor, sellerOrderId, sellerId,
             (db, order, child, now) => Deliver(db, actor, order, child, collected, reference, now, shipping: shipping));
+    }
 
     public Task<int> DeliveryException(ShopActor actor, Guid id, string note) =>
         ApplyToOnlySellerOrder(actor, id, (db, order, child, now) => RecordDeliveryException(db, actor, order, child, note, now));

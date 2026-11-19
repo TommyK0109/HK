@@ -3,6 +3,8 @@ using System.Text.Json;
 using HKShop.Application.Catalog;
 using HKShop.Application.Settlement;
 using HKShop.Application.Transportation;
+using HKShop.Contracts.Clients;
+using HKShop.Contracts.Events;
 using HKShop.Contracts.Ports;
 using HKShop.Domain;
 using HKShop.Domain.Cart;
@@ -12,45 +14,6 @@ using HKShop.Domain.Promotions;
 using HKShop.Domain.Sellers;
 
 namespace HKShop.Application.Checkout;
-
-public sealed record CartLine(long OfferId, long SkuId, long SellerId, string SellerName, string Code, string Slug,
-    string Name, int Quantity, int Available, decimal Price, bool Active, bool PriceChanged);
-public sealed record CartView(Guid Revision, IReadOnlyList<CartLine> Lines)
-{
-    public decimal Estimate => Lines.Where(line => line.Active).Sum(line => line.Price * line.Quantity);
-    public bool SupportsCod => Lines.Count > 0 && Lines.All(line => line.SellerId == Seller.FirstPartyId);
-}
-
-public sealed record CheckoutLineQuote(
-    long OfferId,
-    long SkuId,
-    long SellerId,
-    string SellerName,
-    string Code,
-    string Slug,
-    string Name,
-    int Quantity,
-    int Available,
-    decimal Price,
-    decimal LineSubtotal,
-    decimal SellerDiscountVnd,
-    decimal PlatformDiscountVnd,
-    int CommissionBps,
-    decimal CommissionVnd);
-
-public sealed record SellerOrderQuote(
-    long SellerId,
-    string SellerName,
-    decimal SubtotalVnd,
-    decimal SellerDiscountVnd,
-    decimal PlatformDiscountVnd,
-    decimal ShippingVnd,
-    decimal CommissionVnd,
-    IReadOnlyList<CheckoutLineQuote> Lines)
-{
-    public decimal DiscountVnd => SellerDiscountVnd + PlatformDiscountVnd;
-    public decimal TotalVnd => SubtotalVnd - SellerDiscountVnd - PlatformDiscountVnd + ShippingVnd;
-}
 
 public sealed record CheckoutPreview(
     CheckoutQuote Quote,
@@ -65,12 +28,24 @@ public sealed record CheckoutPreview(
     public bool SupportsCod => Sellers.Count == 1 && Sellers[0].SellerId == Seller.FirstPartyId;
 }
 
-public sealed class AddressService(IShopStore store)
+public sealed class AddressService(IShopStore store, IdentityServiceClient? remoteIdentity = null)
 {
-    public Task<List<CustomerAddress>> List(string customerId) => store.Read(db =>
-        db.List(db.Query<CustomerAddress>().Where(a => a.CustomerId == customerId).OrderBy(a => a.Id)));
+    public async Task<List<CustomerAddress>> List(string customerId)
+    {
+        if (remoteIdentity is not null)
+        {
+            var rows = await remoteIdentity.GetCustomerAddressesAsync();
+            return rows.Select(a => new CustomerAddress
+            {
+                Id = a.Id, CustomerId = a.CustomerId, Recipient = a.Recipient, Phone = a.Phone,
+                AddressText = a.AddressText, Latitude = a.Latitude, Longitude = a.Longitude
+            }).ToList();
+        }
+        return await store.Read(db =>
+            db.List(db.Query<CustomerAddress>().Where(a => a.CustomerId == customerId).OrderBy(a => a.Id)));
+    }
 
-    public Task<int> Save(string customerId, long id, string recipient, string phone, string address,
+    public async Task<int> Save(string customerId, long id, string recipient, string phone, string address,
         double? latitude = null, double? longitude = null)
     {
         recipient = ShopRules.Text(recipient, 100, "Recipient");
@@ -81,7 +56,12 @@ public sealed class AddressService(IShopStore store)
         address = ShopRules.Text(address, 300, "Address");
         if (latitude.HasValue || longitude.HasValue)
             TransportPoint.Require(latitude, longitude, "the delivery address");
-        return store.Write(async db =>
+        if (remoteIdentity is not null)
+        {
+            await remoteIdentity.SaveCustomerAddressAsync(new(id, recipient, phone, address, latitude, longitude));
+            return 0;
+        }
+        return await store.Write(async db =>
         {
             var row = id == 0 ? new CustomerAddress { CustomerId = customerId } : await Find(db, customerId, id);
             row.Recipient = recipient;
@@ -94,24 +74,34 @@ public sealed class AddressService(IShopStore store)
         });
     }
 
-    public Task<int> Delete(string customerId, long id) => store.Write(async db =>
+    public async Task<int> Delete(string customerId, long id)
     {
-        db.Remove(await Find(db, customerId, id));
-        return 0;
-    });
+        if (remoteIdentity is not null)
+        {
+            await remoteIdentity.DeleteCustomerAddressAsync(id);
+            return 0;
+        }
+        return await store.Write(async db =>
+        {
+            db.Remove(await Find(db, customerId, id));
+            return 0;
+        });
+    }
 
     internal static async Task<CustomerAddress> Find(IShopSession db, string customerId, long id) =>
         await db.First(db.Query<CustomerAddress>().Where(a => a.Id == id && a.CustomerId == customerId))
             ?? throw new ShopRuleException("The shipping address does not exist.");
 }
 
-public sealed class CartService(IShopStore store, TimeProvider time)
+public sealed class CartService(IShopStore store, TimeProvider time, OrderingServiceClient? remoteOrdering = null)
 {
-    public Task<CartView> Get(string? customerId, string? guestHash) => store.Read(async db =>
-    {
-        var cart = await Find(db, customerId, guestHash, time.GetUtcNow());
-        return cart is null ? new CartView(Guid.Empty, []) : new CartView(cart.Revision, await ReadLines(db, cart.Id));
-    });
+    public Task<CartView> Get(string? customerId, string? guestHash) => remoteOrdering is not null
+        ? remoteOrdering.CartAsync(customerId is null ? guestHash : null)
+        : store.Read(async db =>
+        {
+            var cart = await Find(db, customerId, guestHash, time.GetUtcNow());
+            return cart is null ? new CartView(Guid.Empty, []) : new CartView(cart.Revision, await ReadLines(db, cart.Id));
+        });
 
     public Task<int> Set(string? customerId, string? guestHash, long skuId, int quantity, bool add, ShopActor? actor = null) =>
         SetLine(customerId, guestHash, skuId, quantity, add, bySku: true, actor);
@@ -123,6 +113,8 @@ public sealed class CartService(IShopStore store, TimeProvider time)
     {
         if (actor?.IsEmployee == true)
             throw new ShopRuleException("Employee and shipper accounts cannot use shopping features.");
+        if (remoteOrdering is not null)
+            return remoteOrdering.ChangeCartAsync(new(customerId is null ? guestHash : null, bySku ? null : id, bySku ? id : null, quantity, add));
         return store.Write(async db =>
         {
             if (quantity < 0 || quantity > 999 || (add && quantity == 0))
@@ -155,21 +147,25 @@ public sealed class CartService(IShopStore store, TimeProvider time)
         });
     }
 
-    public Task<int> Merge(string customerId, string guestHash) => store.Write(async db =>
-    {
-        var now = time.GetUtcNow();
-        var guest = await Find(db, null, guestHash, now);
-        if (guest is null) return 0;
-        var customer = await GetOrCreate(db, customerId, null, now);
-        var adjustments = await AddAvailable(db, customer, guest.Items.Select(item => (item.OfferId, item.Quantity)));
-        db.Remove(guest);
-        Touch(customer, now);
-        return adjustments;
-    });
+    public Task<int> Merge(string customerId, string guestHash) => remoteOrdering is not null
+        ? remoteOrdering.MergeCartAsync(guestHash)
+        : store.Write(async db =>
+        {
+            var now = time.GetUtcNow();
+            var guest = await Find(db, null, guestHash, now);
+            if (guest is null) return 0;
+            var customer = await GetOrCreate(db, customerId, null, now);
+            var adjustments = await AddAvailable(db, customer, guest.Items.Select(item => (item.OfferId, item.Quantity)));
+            db.Remove(guest);
+            Touch(customer, now);
+            return adjustments;
+        });
 
     public Task<int> BuyAgain(ShopActor actor, Guid orderId)
     {
         actor.RequireCustomer();
+        if (remoteOrdering is not null)
+            return remoteOrdering.BuyAgainAsync(orderId);
         return store.Write(async db =>
         {
             var order = await db.First(db.Query<Order>().Where(o => o.Id == orderId && o.CustomerId == actor.UserId))
@@ -312,19 +308,31 @@ public sealed class PromotionService(IShopStore store, TimeProvider time)
 }
 
 public sealed class CheckoutService(IShopStore store, ShopSettings settings, TimeProvider time,
-    TransportSettings? transport = null, ITransportRouting? routing = null, IShippingGateway? shipping = null)
+    TransportSettings? transport = null, ITransportRouting? routing = null, IShippingGateway? shipping = null,
+    OrderingServiceClient? remoteOrdering = null)
 {
     public const string CodRestrictedMessage = "Cash on Delivery is only available for single-seller HKShop orders. Prepaid SePay is required for third-party or multi-seller carts.";
     public const string ExpiredQuoteMessage = "Checkout quote has expired. Please review your order again.";
     public bool UsesTransport => shipping?.Enabled == true || transport?.Enabled == true;
     private const string RouteChanged = "The delivery route or pickup location changed. Please review your order again.";
 
-    public Task<CheckoutPreview> Quote(ShopActor actor, long addressId, PaymentMethod method, string coupon)
+    public async Task<CheckoutPreview> Quote(ShopActor actor, long addressId, PaymentMethod method, string coupon)
     {
         actor.RequireCustomer();
         coupon = ShopRules.Text(coupon, 40, "Coupon code", false).ToUpperInvariant();
         if (!Enum.IsDefined(method)) throw new ShopRuleException("Invalid payment method.");
-        return store.Read(async db =>
+        if (remoteOrdering is not null)
+        {
+            var dto = await remoteOrdering.QuoteAsync(new(addressId, method, coupon));
+            var address = new CustomerAddress
+            {
+                Id = dto.Address.Id, CustomerId = dto.Address.CustomerId, Recipient = dto.Address.Recipient,
+                Phone = dto.Address.Phone, AddressText = dto.Address.AddressText,
+                Latitude = dto.Address.Latitude, Longitude = dto.Address.Longitude
+            };
+            return new CheckoutPreview(dto.Quote, address, dto.Lines, dto.Sellers, dto.Subtotal, dto.Discount, dto.Shipping);
+        }
+        return await store.Read(async db =>
         {
             var now = time.GetUtcNow();
             var cart = await FindCart(db, actor.UserId, now);
@@ -568,15 +576,17 @@ public sealed class CheckoutService(IShopStore store, ShopSettings settings, Tim
         {
             if (paymentStatus == PaymentStatus.Paid)
                 await SettlementLedger.RecordSales(db, order.PaymentAttempts.Single(), order.SellerOrders, now);
-            EmitSellerOrdersConfirmed(db, order, now);
-            db.Notify(order, "confirmed", "Order confirmed", now);
+            EmitOrderConfirmed(db, order, now);
         }
 
         return order.Id;
     }
 
-    internal static void EmitSellerOrdersConfirmed(IShopSession db, Order order, DateTimeOffset now)
+    internal static void EmitOrderConfirmed(IShopSession db, Order order, DateTimeOffset now)
     {
+        db.IntegrationEvent("Order", order.Id.ToString("D"), nameof(OrderConfirmed),
+            new OrderConfirmed(order.Number, order.CustomerEmail), now, $"Order:{order.Id:N}:Confirmed");
+
         foreach (var sellerOrder in order.SellerOrders.OrderBy(so => so.SellerId))
         {
             db.IntegrationEvent("SellerOrder", sellerOrder.Id.ToString("D"), "SellerOrderConfirmed", new

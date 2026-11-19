@@ -1,4 +1,4 @@
 {$HKSHOP_HOSTNAME} {
     encode gzip
-    reverse_proxy app:8080
+    reverse_proxy gateway:8080
 }

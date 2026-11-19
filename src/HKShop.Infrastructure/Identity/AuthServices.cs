@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Data;
 using System.Security.Claims;
 using HKShop.Application;
 using HKShop.Application.Accounts;
@@ -240,6 +241,7 @@ public sealed class EOfficeAuthService(
     UserManager<ShopUser> users,
     SignInManager<ShopUser> signIn,
     ShopDbContext db,
+    IShippingAdminPort shipping,
     SmtpSender smtp,
     ILogger<EOfficeAuthService> logger) : IEOfficeAuthService
 {
@@ -331,23 +333,21 @@ public sealed class EOfficeAuthService(
         }
     }
 
-    public async Task<(string UserId, string Email)> LookupConfirmedUserForShipperAsync(string email)
+    public async Task SetShipperAccessAsync(ShopActor actor, string email, bool active)
     {
+        actor.RequireAdmin();
+        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         var user = await users.FindByEmailAsync(email);
         if (user is null || !user.EmailConfirmed)
             throw new ShopRuleException("Use a registered account with a verified email.");
-        return (user.Id, user.Email!);
-    }
-
-    public async Task SyncShipperRoleAsync(string userId, bool active)
-    {
-        var user = await users.FindByIdAsync(userId);
-        if (user is null) return;
+        await shipping.ConfigureShipperAsync(new SqlShopStore.Session(db), actor, user.Id, user.Email!, active);
         var inRole = await users.IsInRoleAsync(user, "Shipper");
         if (active && !inRole)
-            await users.AddToRoleAsync(user, "Shipper");
+            Require(await users.AddToRoleAsync(user, "Shipper"));
         else if (!active && inRole)
-            await users.RemoveFromRoleAsync(user, "Shipper");
+            Require(await users.RemoveFromRoleAsync(user, "Shipper"));
+        await db.SaveChangesAsync();
+        await transaction.CommitAsync();
     }
 
     private async Task<ShopUser> Current(ClaimsPrincipal principal)

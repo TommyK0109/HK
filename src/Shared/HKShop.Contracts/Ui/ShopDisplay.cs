@@ -73,6 +73,7 @@ public static class ShopDisplay
         SellerStatus.Pending => "Pending approval",
         SellerStatus.Active => "Active",
         SellerStatus.Suspended => "Suspended",
+        SellerStatus.Closed => "Closed",
         _ => value.ToString()
     };
 

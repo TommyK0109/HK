@@ -23,26 +23,27 @@ public sealed class TransportService(IShopStore store, TimeProvider time, ITrans
     public Task<SellerLocationSummary?> Location(ShopActor actor, long sellerId) =>
         store.Write(db => commerce.GetSellerLocationAsync(db, actor, sellerId));
 
-    public Task<int> ConfigureShipper(ShopActor actor, string userId, string email, bool active)
+    public Task<int> ConfigureShipper(ShopActor actor, string userId, string email, bool active) =>
+        store.Write(db => ConfigureShipper(db, actor, userId, email, active));
+
+    internal async Task<int> ConfigureShipper(IShopSession db, ShopActor actor, string userId, string email, bool active)
     {
         actor.RequireAdmin();
-        return store.Write(async db =>
+        if (active) await commerce.RequireShipperEligibilityAsync(db, userId);
+        var row = await db.First(db.Query<TransportShipper>().Where(s => s.UserId == userId));
+        if (row is null)
         {
-            var row = await db.First(db.Query<TransportShipper>().Where(s => s.UserId == userId));
-            if (row is null)
-            {
-                if (!active) return 0;
-                row = new TransportShipper { UserId = userId };
-                db.Add(row);
-            }
-            if (!active && await db.Count(db.Query<TransportAssignment>().Where(a => a.ShipperId == userId && a.EndedAt == null)) != 0)
-                throw new ShopRuleException("Resolve the shipper's active assignment before disabling their account.");
-            row.Active = active;
-            row.Email = email;
-            if (!active) row.OnDuty = false;
-            await commerce.AuditSellerTransportAsync(db, actor.UserId, active ? "Transport shipper enabled" : "Transport shipper disabled", userId, time.GetUtcNow());
-            return 0;
-        });
+            if (!active) return 0;
+            row = new TransportShipper { UserId = userId };
+            db.Add(row);
+        }
+        if (!active && await db.Count(db.Query<TransportAssignment>().Where(a => a.ShipperId == userId && a.EndedAt == null)) != 0)
+            throw new ShopRuleException("Resolve the shipper's active assignment before disabling their account.");
+        row.Active = active;
+        row.Email = email;
+        if (!active) row.OnDuty = false;
+        await commerce.AuditSellerTransportAsync(db, actor.UserId, active ? "Transport shipper enabled" : "Transport shipper disabled", userId, time.GetUtcNow());
+        return 0;
     }
 
     public Task<int> UpdatePresence(ShopActor actor, bool onDuty, double? latitude, double? longitude) =>

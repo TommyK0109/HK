@@ -1,4 +1,5 @@
 @page "/account/profile"
+@inject StoreApplications StoreApplications
 @page "/account/security"
 @page "/account/addresses"
 @attribute [Authorize(Policy = ShopPolicies.CommerceAccount)]
@@ -13,6 +14,7 @@
     <a href="/account/profile" aria-current="@(path == "/account/profile" ? "page" : null)">Profile</a>
     <a href="/account/addresses" aria-current="@(path == "/account/addresses" ? "page" : null)">Addresses</a>
     <a href="/account/security" aria-current="@(path == "/account/security" ? "page" : null)">Security</a>
+    <a href="/account/store">Register a store @if (unread > 0) { <span>(@unread new)</span> }</a>
 </nav>
 
 @if (user is not null && !user.Disabled)
@@ -111,6 +113,7 @@
     [SupplyParameterFromQuery] public string? ReturnUrl { get; set; }
     private ShopUserIdentity? user;
     private bool hasProfileImage;
+    private int unread;
     private string? key;
     private string path = "";
     private List<CustomerAddress> savedAddresses = [];
@@ -121,6 +124,9 @@
         path = (Request.Context.Request.Path.Value ?? "").TrimEnd('/').ToLowerInvariant();
         user = await Request.Identity();
         if (user is null || user.Disabled) return;
+        if (user.EmailConfirmed)
+            unread = (await StoreApplications.Mine(await Request.Actor()))
+                .Count(a => a.Status != StoreApplicationStatus.Pending && a.ReadAt is null);
         if (path == "/account/profile")
             hasProfileImage = await Profiles.HasImage(user.Id, Request.Context.RequestAborted);
         if (path == "/account/security" && !user.TwoFactorEnabled)

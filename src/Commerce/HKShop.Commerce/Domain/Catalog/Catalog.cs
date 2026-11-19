@@ -10,6 +10,7 @@ public sealed class Category
 public sealed class Product
 {
     public int Id { get; set; }
+    public long SellerId { get; set; } = Sellers.Seller.FirstPartyId;
     public long? CategoryId { get; set; }
     public string Name { get; set; } = "";
     public string Slug { get; set; } = "";

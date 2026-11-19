@@ -105,13 +105,14 @@ public sealed class CatalogService(IShopStore store, IProductImageStore media, T
             .ThenBy(offer => offer.Id)
             .Select(offer => new CatalogOfferDisplay(offer.Id, offer.SkuId, offer.SkuCode, offer.SellerSkuCode,
                 offer.SellerName, offer.Size, offer.Color, offer.Price, offer.Available)));
+        if (product.SellerId != Seller.FirstPartyId && offers.Count == 0) return null;
         var variants = offers.DistinctBy(offer => offer.SkuId).OrderBy(offer => offer.SkuId).Select(offer =>
             new SkuDisplay(offer.SkuId, offer.SkuCode, offer.Size, offer.Color, offer.Price, true, offer.Available)).ToList();
         return new CatalogDetails(product, variants, await ReadImages(db, product.Id)) { Offers = offers };
     });
 
     private static IQueryable<Product> BrowsableImports(IShopSession db) =>
-        db.Query<Product>().Where(p => p.Status == ProductStatus.Draft &&
+        db.Query<Product>().Where(p => p.SellerId == Seller.FirstPartyId && p.Status == ProductStatus.Draft &&
             (p.Slug.StartsWith("abo-") || p.Slug.StartsWith("myntra-")) &&
             db.Query<Category>().Any(c => c.Id == p.CategoryId && c.Active) &&
             db.Query<ProductImage>().Any(image => image.ProductId == p.Id));
@@ -340,12 +341,15 @@ public sealed class InventoryService(IShopStore store, TimeProvider time)
 
     internal static IQueryable<OfferBalanceRow> ActiveOfferBalances(IShopSession db) =>
         from offer in db.Query<SellerOffer>()
+        join sku in db.Query<Sku>() on offer.SkuId equals sku.Id
+        join product in db.Query<Product>() on sku.ProductId equals product.Id
         join seller in db.Query<Seller>() on offer.SellerId equals seller.Id
         join balance in db.Query<InventoryBalance>()
             on new { OfferId = offer.Id, offer.SellerId } equals new { balance.OfferId, balance.SellerId }
         join location in db.Query<SellerLocation>()
             on new { Id = balance.LocationId, balance.SellerId } equals new { location.Id, location.SellerId }
-        where offer.Status == SellerOfferStatus.Approved && seller.Status == SellerStatus.Active && location.Active
+        where offer.Status == SellerOfferStatus.Approved && seller.Status == SellerStatus.Active && location.Active &&
+              product.SellerId == offer.SellerId
         select new OfferBalanceRow { SkuId = offer.SkuId, OnHand = balance.OnHand, Reserved = balance.Reserved };
 
     public Task<Page<StockRow>> List(ShopActor actor, bool low, int page = 1)
@@ -357,7 +361,8 @@ public sealed class InventoryService(IShopStore store, TimeProvider time)
             var query = from sku in db.Query<Sku>()
                         join product in db.Query<Product>() on sku.ProductId equals product.Id
                         join stock in db.Query<StockBalance>() on sku.Id equals stock.SkuId
-                        where !low || (sku.Active && stock.OnHand - stock.Reserved <= stock.LowThreshold)
+                        where product.SellerId == Seller.FirstPartyId &&
+                              (!low || (sku.Active && stock.OnHand - stock.Reserved <= stock.LowThreshold))
                         orderby sku.Code
                         select new StockRow(
                             sku.Id,
@@ -387,6 +392,11 @@ public sealed class InventoryService(IShopStore store, TimeProvider time)
         if (threshold < 0) throw new ShopRuleException("The stock threshold must be zero or greater.");
         return store.Write(async db =>
         {
+            if (await db.First(from sku in db.Query<Sku>()
+                               join product in db.Query<Product>() on sku.ProductId equals product.Id
+                               where sku.Id == skuId && product.SellerId == Seller.FirstPartyId
+                               select sku) is null)
+                throw new ShopRuleException("This variant does not belong to HKShop.");
             var stock = await GetBalance(db, skuId);
             stock.Adjust(delta);
             stock.LowThreshold = threshold;

@@ -37,7 +37,7 @@ public sealed class KafkaSqlFactAttribute : SqlFactAttribute
     }
 }
 
-public sealed class SqlMarketplaceCheckoutTests
+public sealed partial class SqlMarketplaceCheckoutTests
 {
     [SqlFact]
     public async Task ExpiredQueuedCheckoutCannotPlaceAnOrderAfterDelivery()
@@ -275,7 +275,7 @@ public sealed class SqlMarketplaceCheckoutTests
             await context.Database.MigrateAsync();
             var fixture = await SeedMarketplaceAsync(factory, context);
 
-            // Cart contains Seller 1 (offer1 on sku1: 200k x 1) AND Seller 2 (offer2a on SAME sku1: 180k x 1, offer2b on sku2: 100k x 2)
+            // Cart contains one HKShop offer and two offers on the partner's variants.
             await fixture.Cart.SetOffer(fixture.Buyer.UserId, null, fixture.Offer1Id, 1, add: false);
             await fixture.Cart.SetOffer(fixture.Buyer.UserId, null, fixture.Offer2AId, 1, add: false);
             await fixture.Cart.SetOffer(fixture.Buyer.UserId, null, fixture.Offer2BId, 2, add: false);
@@ -371,6 +371,8 @@ public sealed class SqlMarketplaceCheckoutTests
             Assert.Equal(1, await afterPay.Set<PaymentEvent>().CountAsync(e => e.OrderId == orderId));
             Assert.Equal(ClaimStatus.Redeemed, (await afterPay.Set<PromotionClaim>().SingleAsync(c => c.OrderId == orderId)).Status);
             Assert.Equal(1, await afterPay.Set<IntegrationOutboxEvent>().CountAsync(e => e.EventType == "PaymentCaptured"));
+            Assert.Equal(1, await afterPay.Set<IntegrationOutboxEvent>().CountAsync(e => e.EventType == "OrderConfirmed"));
+            Assert.False(await afterPay.Set<OutboxMessage>().AnyAsync(m => m.EventKey.EndsWith(":confirmed")));
             Assert.Equal(2, await afterPay.Set<IntegrationOutboxEvent>().CountAsync(e => e.EventType == "SellerOrderConfirmed"));
 
             var day = DateOnly.FromDateTime(ShopSettings.VietnamTime(fixture.Clock.GetUtcNow()).DateTime);
@@ -661,18 +663,13 @@ public sealed class SqlMarketplaceCheckoutTests
             context.Add(category);
             await context.SaveChangesAsync();
 
-            var product = new Product
-            {
-                CategoryId = category.Id, Name = "Phone Case", Slug = "phone-case", Description = "Desc",
-                Images = [new ProductImage { FileName = "case.webp", Alt = "Case" }]
-            };
-            context.Add(product);
-            await context.SaveChangesAsync();
+            var productId = await SqlTestDatabase.InsertLegacyProduct(context, "Phone Case", "phone-case", category.Id);
 
             await context.Database.ExecuteSqlInterpolatedAsync($"""
-                UPDATE dbo.Products SET Status = 1 WHERE Id = {product.Id};
+                UPDATE dbo.Products SET Status = 1 WHERE Id = {productId};
+                INSERT dbo.ProductImages (ProductId, FileName, Alt) VALUES ({productId}, N'case.webp', N'Case');
                 INSERT dbo.Skus (ProductId, Code, Size, Color, PriceVnd, Active)
-                VALUES ({product.Id}, N'SKU-P2', N'M', N'Black', 120000, 1);
+                VALUES ({productId}, N'SKU-P2', N'M', N'Black', 120000, 1);
                 DECLARE @skuId bigint = SCOPE_IDENTITY();
                 INSERT dbo.StockBalances (SkuId, OnHand, Reserved, LowThreshold)
                 VALUES (@skuId, 5, 1, 5);
@@ -802,11 +799,13 @@ public sealed class SqlMarketplaceCheckoutTests
         };
         product1.Publish(true);
 
+        var seller2Id = await StoreApplicationFixture.Open(store, clock, admin, sellerOwner, "Partner Store");
         var sku2 = new Sku { Code = "SKU-2", Size = "M", Color = "Black", Active = true, PriceVnd = null };
+        var partnerVariant = new Sku { Code = "PARTNER-SKU-1", Size = "L", Color = "Blue", Active = true };
         var product2 = new Product
         {
-            CategoryId = category.Id, Name = "Seller Cap", Slug = "seller-cap", Description = "Cap",
-            Skus = [sku2], Images = [new ProductImage { FileName = "p2.webp", Alt = "P2" }]
+            SellerId = seller2Id, CategoryId = category.Id, Name = "Seller Cap", Slug = "seller-cap", Description = "Cap",
+            Skus = [sku2, partnerVariant], Images = [new ProductImage { FileName = "p2.webp", Alt = "P2" }]
         };
         product2.Publish(true);
         context.AddRange(product1, product2);
@@ -815,16 +814,12 @@ public sealed class SqlMarketplaceCheckoutTests
         var inventory = new InventoryService(store, clock);
         await inventory.Adjust(staff, sku1.Id, 5, 1, "Initial stock");
 
-        var sellers = new SellerService(store, clock);
-        var seller2Id = await sellers.Register(sellerOwner, "Partner Store", "partner-store");
-        await sellers.SetStatus(admin, seller2Id, SellerStatus.Active, null);
-
         var loc2 = new SellerLocation { SellerId = seller2Id, Name = "Partner Warehouse", Active = true };
         context.Add(loc2);
         await context.SaveChangesAsync();
 
         var offer1 = await context.Set<SellerOffer>().SingleAsync(o => o.SellerId == Seller.FirstPartyId && o.SkuId == sku1.Id);
-        var offer2a = new SellerOffer { SellerId = seller2Id, SkuId = sku1.Id, SellerSkuCode = "P2-SKU1", PriceVnd = 180_000m, Status = SellerOfferStatus.Approved };
+        var offer2a = new SellerOffer { SellerId = seller2Id, SkuId = partnerVariant.Id, SellerSkuCode = "P2-SKU1", PriceVnd = 180_000m, Status = SellerOfferStatus.Approved };
         var offer2b = new SellerOffer { SellerId = seller2Id, SkuId = sku2.Id, SellerSkuCode = "P2-SKU2", PriceVnd = 100_000m, Status = SellerOfferStatus.Approved };
         context.AddRange(offer2a, offer2b);
         await context.SaveChangesAsync();

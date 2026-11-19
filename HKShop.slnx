@@ -4,18 +4,30 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Shared/HKShop.Contracts/HKShop.Contracts.csproj" />
+    <Project Path="src/BuildingBlocks/HKShop.ServiceDefaults/HKShop.ServiceDefaults.csproj" />
+    <Project Path="src/BuildingBlocks/HKShop.Messaging/HKShop.Messaging.csproj" />
     <Project Path="src/Commerce/HKShop.Commerce/HKShop.Commerce.csproj" />
     <Project Path="src/EOffice/HKShop.EOffice/HKShop.EOffice.csproj" />
     <Project Path="src/HKShop.Infrastructure/HKShop.Infrastructure.csproj" />
     <Project Path="src/HKShop.Web/HKShop.Web.csproj" />
+    <Project Path="src/Gateway/HKShop.Gateway/HKShop.Gateway.csproj" />
+    <Project Path="src/Services/HKShop.Notification/HKShop.Notification.csproj" />
+    <Project Path="src/Services/Shipping/HKShop.Shipping.Api/HKShop.Shipping.Api.csproj" />
+    <Project Path="src/Services/Catalog/HKShop.Catalog.Api/HKShop.Catalog.Api.csproj" />
+    <Project Path="src/Services/Payments/HKShop.Payments.Api/HKShop.Payments.Api.csproj" />
+    <Project Path="src/Services/Ordering/HKShop.Ordering.Api/HKShop.Ordering.Api.csproj" />
+    <Project Path="src/Services/Identity/HKShop.Identity.Api/HKShop.Identity.Api.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/HKShop.AboImport/HKShop.AboImport.csproj" />
     <Project Path="tools/HKShop.MediaSync/HKShop.MediaSync.csproj" />
+    <Project Path="tools/HKShop.DataSplit/HKShop.DataSplit.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/HKShop.UnitTests/HKShop.UnitTests.csproj" />
+    <Project Path="tests/HKShop.ContractTests/HKShop.ContractTests.csproj" />
     <Project Path="tests/HKShop.IntegrationTests/HKShop.IntegrationTests.csproj" />
+    <Project Path="tests/HKShop.EndToEndTests/HKShop.EndToEndTests.csproj" />
     <Project Path="tests/HKShop.BrowserTests/HKShop.BrowserTests.csproj" />
   </Folder>
 </Solution>

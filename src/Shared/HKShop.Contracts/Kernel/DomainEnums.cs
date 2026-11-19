@@ -5,7 +5,7 @@ namespace HKShop.Domain.Catalog
 
 namespace HKShop.Domain.Sellers
 {
-    public enum SellerStatus { Pending, Active, Suspended }
+    public enum SellerStatus { Pending, Active, Suspended, Closed }
     public enum SellerRole { Owner, CatalogManager, Fulfillment, Finance }
     public enum SellerMembershipStatus { Active, Revoked }
     public enum SellerOfferStatus { Pending, Approved, Rejected, Archived }

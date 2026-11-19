@@ -10,6 +10,7 @@ namespace HKShop.Infrastructure.Kafka;
 
 public sealed class KafkaCheckoutSettings
 {
+    public string OrderingTopic { get; set; } = HKShop.Contracts.Events.OrderConfirmed.Topic;
     public string BootstrapServers { get; set; } = "";
     public string CheckoutTopic { get; set; } = "hkshop.checkout.requests.v1";
     public string CheckoutGroupId { get; set; } = "hkshop.checkout.v1";

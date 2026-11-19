@@ -1,6 +1,7 @@
 using HKShop.Application.Checkout;
 using HKShop.Application.Orders;
 using HKShop.Application.Settlement;
+using HKShop.Contracts.Clients;
 using HKShop.Contracts.Ports;
 using HKShop.Domain;
 using HKShop.Domain.Orders;
@@ -10,15 +11,27 @@ namespace HKShop.Application.Payments;
 
 public sealed record PaymentJob(Guid OrderId, string Number);
 
-public sealed class PaymentService(IShopStore store, IPaymentGateway gateway, TimeProvider time, IShippingGateway? shipping = null)
+public sealed class PaymentService(
+    IShopStore store,
+    IPaymentGateway gateway,
+    TimeProvider time,
+    IShippingGateway? shipping = null,
+    PaymentsServiceClient? remotePayments = null)
 {
     private const string VoidIssue = "SePay reported a cancelled or voided transaction. Verify before processing.";
 
-    public bool OnlineAvailable => gateway.Available;
+    public bool OnlineAvailable => remotePayments is not null || gateway.Available;
+
+    public async Task<bool> IsOnlineAvailableAsync(CancellationToken ct = default) =>
+        remotePayments is not null
+            ? (await remotePayments.GetConfigAsync(ct)).OnlineAvailable
+            : gateway.Available;
 
     public Task<HostedCheckout> Form(ShopActor actor, Guid id)
     {
         actor.RequireCustomer();
+        if (remotePayments is not null)
+            return remotePayments.GetCheckoutFormAsync(id);
         return store.Read(async db =>
         {
             var order = await OrderService.FindOrder(db, id, actor.UserId);
@@ -34,10 +47,12 @@ public sealed class PaymentService(IShopStore store, IPaymentGateway gateway, Ti
         });
     }
 
-    public Task<string> CreateRetryAttempt(ShopActor actor, Guid id)
+    public async Task<string> CreateRetryAttempt(ShopActor actor, Guid id)
     {
         actor.RequireCustomer();
-        return store.Write(async db =>
+        if (remotePayments is not null)
+            return (await remotePayments.CreateRetryAttemptAsync(id)).ProviderInvoice;
+        return await store.Write(async db =>
         {
             var order = await OrderService.FindOrder(db, id, actor.UserId);
             order.RequireStatus(OrderStatus.AwaitingPayment);
@@ -265,8 +280,7 @@ public sealed class PaymentService(IShopStore store, IPaymentGateway gateway, Ti
                 targetAttempt.ProviderTransaction,
                 PaidAt = now
             }, now, $"PaymentAttempt:{targetAttempt.Id:N}:Captured");
-            CheckoutService.EmitSellerOrdersConfirmed(db, order, now);
-            db.Notify(order, "confirmed", "Order confirmed", now);
+            CheckoutService.EmitOrderConfirmed(db, order, now);
             return true;
         }
 
@@ -429,10 +443,12 @@ public sealed class PaymentService(IShopStore store, IPaymentGateway gateway, Ti
             await Reconcile(orderId, invoice, cancellationToken);
     }
 
-    public Task<List<PaymentIssue>> Issues(ShopActor actor)
+    public async Task<List<PaymentIssue>> Issues(ShopActor actor)
     {
         actor.RequireAdmin();
-        return store.Read(db => db.List((from attempt in db.Query<PaymentAttempt>()
+        if (remotePayments is not null)
+            return (await remotePayments.GetIssuesAsync()).ToList();
+        return await store.Read(db => db.List((from attempt in db.Query<PaymentAttempt>()
             join order in db.Query<Order>() on attempt.OrderId equals order.Id
             join payment in db.Query<Payment>() on order.Id equals payment.OrderId
             where attempt.Method == PaymentMethod.SePay
@@ -449,18 +465,33 @@ public sealed class PaymentService(IShopStore store, IPaymentGateway gateway, Ti
                 attempt.CreatedAt)).Take(100)));
     }
 
-    public Task<List<Refund>> PendingRefunds(ShopActor actor)
+    public async Task<List<Refund>> PendingRefunds(ShopActor actor)
     {
         actor.RequireAdmin();
-        return store.Read(db => db.List(db.Query<Refund>().Where(r => r.Status == RefundStatus.Pending)
+        if (remotePayments is not null)
+        {
+            return (await remotePayments.GetPendingRefundsAsync()).Select(r => new Refund
+            {
+                Id = r.Id, OrderId = r.OrderId, PaymentAttemptId = r.PaymentAttemptId, SellerOrderId = r.SellerOrderId,
+                ReturnId = r.ReturnId, BusinessKey = r.BusinessKey, AmountVnd = r.AmountVnd, ShippingVnd = r.ShippingVnd,
+                Status = r.Status, Simulated = r.Simulated, Reference = r.Reference, ProviderReference = r.ProviderReference,
+                Issue = r.Issue, NextAttemptAt = r.NextAttemptAt, RequestedAt = r.RequestedAt, CompletedAt = r.CompletedAt
+            }).ToList();
+        }
+        return await store.Read(db => db.List(db.Query<Refund>().Where(r => r.Status == RefundStatus.Pending)
             .OrderBy(r => r.RequestedAt).Take(100)));
     }
 
-    public Task<int> CompleteRefund(ShopActor actor, long refundId, string reference)
+    public async Task<int> CompleteRefund(ShopActor actor, long refundId, string reference)
     {
         actor.RequireAdmin();
         reference = ShopRules.Text(reference, 100, "Confirmed refund reference");
-        return store.Write(async db =>
+        if (remotePayments is not null)
+        {
+            await remotePayments.CompleteRefundAsync(refundId, reference);
+            return 0;
+        }
+        return await store.Write(async db =>
         {
             var row = await db.First(db.Query<Refund>().Where(r => r.Id == refundId))
                 ?? throw new ShopRuleException("Refund request not found.");

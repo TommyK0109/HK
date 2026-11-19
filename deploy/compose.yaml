@@ -65,23 +65,39 @@ services:
 
   kafka-init:
     image: apache/kafka:4.3.2
-    entrypoint: ["/opt/kafka/bin/kafka-topics.sh"]
+    entrypoint: ["/bin/sh", "-ec"]
+    environment:
+      CHECKOUT_TOPIC: ${HKSHOP_KAFKA_CHECKOUT_TOPIC:-hkshop.checkout.requests.v1}
+      ORDERING_TOPIC: ${HKSHOP_KAFKA_ORDERING_TOPIC:-hkshop.ordering.events.v1}
     command:
-      - "--bootstrap-server"
-      - "kafka:19092"
-      - "--create"
-      - "--if-not-exists"
-      - "--topic"
-      - "${HKSHOP_KAFKA_CHECKOUT_TOPIC:-hkshop.checkout.requests.v1}"
-      - "--partitions"
-      - "1"
-      - "--replication-factor"
-      - "1"
+      - |
+        for topic in "$$CHECKOUT_TOPIC" "$$ORDERING_TOPIC" "$$ORDERING_TOPIC.notification.dlq.v1"; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic "$$topic" --partitions 1 --replication-factor 1
+        done
     depends_on:
       kafka:
         condition: service_healthy
     networks:
       - web
+
+  notification:
+    build:
+      context: ..
+      dockerfile: deploy/Notification.Dockerfile
+    environment:
+      ConnectionStrings__Notification: ${HKSHOP_NOTIFICATION_CONNECTION:-Server=sql;Database=HKShopNotification;User ID=sa;Password=${HKSHOP_SQL_SA_PASSWORD};Encrypt=True;TrustServerCertificate=True}
+      Kafka__BootstrapServers: kafka:19092
+      Kafka__OrderingTopic: ${HKSHOP_KAFKA_ORDERING_TOPIC:-hkshop.ordering.events.v1}
+      Smtp__Host: mailpit
+    depends_on:
+      sql:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_started
+    networks: [database, web]
+    restart: unless-stopped
 
   app:
     profiles: [staging]
@@ -109,6 +125,7 @@ services:
       Seq__ApiKey: ${HKSHOP_SEQ_API_KEY:-}
       Kafka__BootstrapServers: kafka:19092
       Kafka__CheckoutTopic: ${HKSHOP_KAFKA_CHECKOUT_TOPIC:-hkshop.checkout.requests.v1}
+      Kafka__OrderingTopic: ${HKSHOP_KAFKA_ORDERING_TOPIC:-hkshop.ordering.events.v1}
       Kafka__CheckoutGroupId: ${HKSHOP_KAFKA_CHECKOUT_GROUP_ID:-hkshop.checkout.v1}
       SePay__MerchantId: ${HKSHOP_SEPAY_MERCHANT_ID:-}
       SePay__MerchantSecret: ${HKSHOP_SEPAY_MERCHANT_SECRET:-}
@@ -138,6 +155,29 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  gateway:
+    profiles: [staging]
+    build:
+      context: ..
+      dockerfile: deploy/Gateway.Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Staging
+      ASPNETCORE_HTTP_PORTS: 8080
+      AllowedHosts: ${HKSHOP_HOSTNAME:-localhost};gateway
+      Destinations__Web: http://app:8080
+      Destinations__Payments: http://app:8080
+      Destinations__Shipping: http://app:8080
+      HttpsRedirection__Enabled: "false"
+      Seq__ServerUrl: http://seq:5341
+      Seq__ApiKey: ${HKSHOP_SEQ_API_KEY:-}
+      Proxy__KnownProxy: 172.29.88.10
+    networks:
+      - web
+    depends_on:
+      - app
+      - seq
+    restart: unless-stopped
+
   proxy:
     profiles: [staging]
     image: ${HKSHOP_CADDY_IMAGE:-caddy:2.10-alpine}
@@ -154,7 +194,7 @@ services:
       web:
         ipv4_address: 172.29.88.10
     depends_on:
-      - app
+      - gateway
     restart: unless-stopped
 
   minio:

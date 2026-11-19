@@ -25,7 +25,7 @@ public sealed class CommerceCheckoutController(
     {
         if (!ModelState.IsValid) throw new ShopRuleException("Invalid form data.");
         var quote = tokens.Read(quoteToken);
-        if (quote.Method == PaymentMethod.SePay && !payments.OnlineAvailable)
+        if (quote.Method == PaymentMethod.SePay && !await payments.IsOnlineAvailableAsync(HttpContext.RequestAborted))
             throw new ShopRuleException("SePay Sandbox is not available.");
         var result = await checkout.Submit(await request.Actor(), quote);
         Response.Headers.Location = result.OrderId is Guid orderId

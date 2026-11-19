@@ -15,7 +15,7 @@ public static class CommerceModelConfiguration
     {
         model.Entity<Seller>(b =>
         {
-            b.ToTable("Sellers", t => t.HasCheckConstraint("CK_Sellers_Status", "[Status] BETWEEN 0 AND 2"));
+            b.ToTable("Sellers", t => t.HasCheckConstraint("CK_Sellers_Status", "[Status] BETWEEN 0 AND 3"));
             b.Property(x => x.Slug).HasMaxLength(64).IsUnicode(false);
             b.Property(x => x.DisplayName).HasMaxLength(100);
             b.HasIndex(x => x.Slug).IsUnique();
@@ -24,6 +24,31 @@ public static class CommerceModelConfiguration
                 Id = Seller.FirstPartyId, Slug = "hkshop", DisplayName = "HKShop", Status = SellerStatus.Active,
                 CreatedAt = DateTimeOffset.UnixEpoch
             });
+        });
+        model.Entity<StoreApplication>(b =>
+        {
+            b.ToTable("StoreApplications");
+            b.Property(x => x.StoreName).HasMaxLength(100);
+            b.Property(x => x.Email).HasMaxLength(256);
+            b.Property(x => x.DeclineReason).HasMaxLength(250);
+            b.HasIndex(x => new { x.UserId, x.SubmittedAt });
+            b.HasIndex(x => new { x.Status, x.SubmittedAt });
+            b.HasIndex(x => x.SellerId).IsUnique().HasFilter("[SellerId] IS NOT NULL");
+            b.HasOne<Seller>().WithMany().HasForeignKey(x => x.SellerId).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<ShopUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
+        });
+        model.Entity<StoreApplicationVerification>(b =>
+        {
+            b.ToTable("StoreApplicationVerifications");
+            b.HasKey(x => x.ApplicationId);
+            b.HasOne<StoreApplication>().WithOne().HasForeignKey<StoreApplicationVerification>(x => x.ApplicationId);
+        });
+        model.Entity<StoreVerificationDocument>(b =>
+        {
+            b.ToTable("StoreVerificationDocuments");
+            b.HasKey(x => new { x.ApplicationId, x.Kind });
+            b.Property(x => x.ContentType).HasMaxLength(32);
+            b.HasOne<StoreApplicationVerification>().WithMany().HasForeignKey(x => x.ApplicationId);
         });
         model.Entity<SellerMembership>(b =>
         {
@@ -119,6 +144,8 @@ public static class CommerceModelConfiguration
         model.Entity<Product>(b =>
         {
             b.ToTable("Products");
+            b.Property(x => x.SellerId).HasDefaultValue(Seller.FirstPartyId);
+            b.HasOne<Seller>().WithMany().HasForeignKey(x => x.SellerId).OnDelete(DeleteBehavior.Restrict);
             b.Property(x => x.Name).HasMaxLength(150);
             b.Property(x => x.Slug).HasMaxLength(150);
             b.Property(x => x.Description).HasMaxLength(4000);

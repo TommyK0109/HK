@@ -29,7 +29,8 @@ public sealed class CommerceOrdersController(
     public async Task<IActionResult> RetryPayment(Guid id)
     {
         if (!ModelState.IsValid) throw new ShopRuleException("Invalid form data.");
-        if (!payments.OnlineAvailable) throw new ShopRuleException("SePay Sandbox is not available.");
+        if (!await payments.IsOnlineAvailableAsync(HttpContext.RequestAborted))
+            throw new ShopRuleException("SePay Sandbox is not available.");
         await payments.CreateRetryAttempt(await request.Actor(), id);
         TempData["Notice"] = "Created a new SePay payment attempt.";
         return Redirect($"/orders/{id:D}");

@@ -17,7 +17,7 @@
         {
             <p class="message">@CheckoutService.CodRestrictedMessage</p>
         }
-        @if (!Checkout.UsesTransport && !supportsCod && !Payments.OnlineAvailable)
+        @if (!Checkout.UsesTransport && !supportsCod && !onlineAvailable)
         {
             <p class="message message-error">SePay Sandbox is required for this order but is not currently configured.</p>
         }
@@ -48,7 +48,7 @@
                         {
                             <option value="Cod" selected="@(selectedMethod != "SePay")">Cash on Delivery (Simulated)</option>
                         }
-                        @if (Payments.OnlineAvailable)
+                        @if (onlineAvailable)
                         {
                             <option value="SePay" selected="@(selectedMethod == "SePay")">@(Checkout.UsesTransport ? "Pay online with SePay" : "SePay Sandbox")</option>
                         }
@@ -124,6 +124,7 @@
     private CheckoutPreview? preview;
     private string? error;
     private bool supportsCod = true;
+    private bool onlineAvailable;
     private string selectedMethod => Method ?? (Checkout.UsesTransport ? "" : supportsCod ? "Cod" : "SePay");
 
     protected override async Task OnParametersSetAsync()
@@ -131,6 +132,7 @@
         preview = null;
         error = null;
         var actor = await Request.Actor();
+        onlineAvailable = await Payments.IsOnlineAvailableAsync();
         var cart = await Cart.Get(actor.UserId, null);
         supportsCod = cart.SupportsCod;
         addresses = await Addresses.List(actor.UserId);
@@ -138,7 +140,7 @@
         try
         {
             if (!Enum.TryParse<PaymentMethod>(selectedMethod, out var method) ||
-                (method == PaymentMethod.SePay && !Payments.OnlineAvailable))
+                (method == PaymentMethod.SePay && !onlineAvailable))
                 throw new ShopRuleException("Invalid payment method.");
             preview = await Checkout.Quote(actor, AddressId.Value, method, Coupon ?? "");
         }

@@ -2,7 +2,7 @@
 @layout EOfficeLayout
 @attribute [Authorize(Policy = ShopPolicies.EOfficeShipper)]
 @inject IShopRequestContext Request
-@inject TransportService Transport
+@inject IShippingShipperPort Shipper
 @inject TransportSettings Settings
 
 <PageTitle>Shipper workspace · HKShop EOffice</PageTitle>
@@ -105,8 +105,8 @@ else
 }
 
 @code {
-    private TransportJob? job;
-    private IReadOnlyList<TransportJob> remittances = [];
+    private TransportJobDto? job;
+    private IReadOnlyList<TransportJobDto> remittances = [];
     private Guid? assignmentId;
     private bool onDuty;
     private string? error;
@@ -116,8 +116,11 @@ else
         try
         {
             var actor = await Request.Actor();
-            (onDuty, job, assignmentId) = await Transport.ShipperJob(actor);
-            remittances = await Transport.ShipperRemittances(actor);
+            var state = await Shipper.ShipperStateAsync(actor);
+            onDuty = state.OnDuty;
+            job = state.ActiveJob;
+            assignmentId = state.AssignmentId;
+            remittances = state.Remittances;
         }
         catch (ShopRuleException problem)
         {

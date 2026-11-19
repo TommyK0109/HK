@@ -30,5 +30,5 @@ public interface IShippingCommerceCallbackPort
     Task OnDoorPaymentVerifiedAsync(IShopSession db, Guid sellerOrderId, string? transactionReference, bool postRetainedFee, DateTimeOffset now);
     Task OnPickupDeadlineExpiredAsync(IShopSession db, Guid sellerOrderId, DateTimeOffset now);
     Task PostShipperPayoutLedgerAsync(IShopSession db, string? actorId, Guid sellerOrderId, decimal shipperFeeVnd, string reference, DateTimeOffset now);
-    Task<bool> HasCustomerOrSellerActivityAsync(IShopSession db, string userId);
+    Task RequireShipperEligibilityAsync(IShopSession db, string userId);
 }

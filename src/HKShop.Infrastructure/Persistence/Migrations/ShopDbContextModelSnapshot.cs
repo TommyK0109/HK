@@ -146,6 +146,11 @@ namespace HKShop.Infrastructure.Persistence.Migrations
                         .HasMaxLength(150)
                         .HasColumnType("nvarchar(150)");
 
+                    b.Property<long>("SellerId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(1L);
+
                     b.Property<string>("Slug")
                         .IsRequired()
                         .HasMaxLength(150)
@@ -157,6 +162,8 @@ namespace HKShop.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("CategoryId");
+
+                    b.HasIndex("SellerId");
 
                     b.HasIndex("Slug")
                         .IsUnique();
@@ -1816,7 +1823,7 @@ namespace HKShop.Infrastructure.Persistence.Migrations
 
                     b.ToTable("Sellers", null, t =>
                         {
-                            t.HasCheckConstraint("CK_Sellers_Status", "[Status] BETWEEN 0 AND 2");
+                            t.HasCheckConstraint("CK_Sellers_Status", "[Status] BETWEEN 0 AND 3");
                         });
 
                     b.HasData(
@@ -2004,6 +2011,105 @@ namespace HKShop.Infrastructure.Persistence.Migrations
 
                             t.HasCheckConstraint("CK_SellerOffers_Status", "[Status] BETWEEN 0 AND 3");
                         });
+                });
+
+            modelBuilder.Entity("HKShop.Domain.Sellers.StoreApplication", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset?>("DecidedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("DeclineReason")
+                        .HasMaxLength(250)
+                        .HasColumnType("nvarchar(250)");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("ProductsJson")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTimeOffset?>("ReadAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("ReviewerId")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<long?>("SellerId")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<string>("StoreName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTimeOffset>("SubmittedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(450)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SellerId")
+                        .IsUnique()
+                        .HasFilter("[SellerId] IS NOT NULL");
+
+                    b.HasIndex("Status", "SubmittedAt");
+
+                    b.HasIndex("UserId", "SubmittedAt");
+
+                    b.ToTable("StoreApplications", (string)null);
+                });
+
+            modelBuilder.Entity("HKShop.Domain.Sellers.StoreApplicationVerification", b =>
+                {
+                    b.Property<Guid>("ApplicationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("BusinessLicenseNumber")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("NationalId")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.HasKey("ApplicationId");
+
+                    b.ToTable("StoreApplicationVerifications", (string)null);
+                });
+
+            modelBuilder.Entity("HKShop.Domain.Sellers.StoreVerificationDocument", b =>
+                {
+                    b.Property<Guid>("ApplicationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<byte[]>("Data")
+                        .IsRequired()
+                        .HasColumnType("varbinary(max)");
+
+                    b.HasKey("ApplicationId", "Kind");
+
+                    b.ToTable("StoreVerificationDocuments", (string)null);
                 });
 
             modelBuilder.Entity("HKShop.Domain.Settlement.LedgerAccount", b =>
@@ -2621,6 +2727,12 @@ namespace HKShop.Infrastructure.Persistence.Migrations
                         .WithMany()
                         .HasForeignKey("CategoryId")
                         .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HKShop.Domain.Sellers.Seller", null)
+                        .WithMany()
+                        .HasForeignKey("SellerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("HKShop.Domain.Catalog.ProductImage", b =>
@@ -2949,7 +3061,7 @@ namespace HKShop.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.HasOne("HKShop.Domain.Orders.SellerOrder", null)
-                        .WithOne("Transport")
+                        .WithOne()
                         .HasForeignKey("HKShop.Domain.Orders.TransportParcel", "SellerOrderId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
@@ -3081,6 +3193,38 @@ namespace HKShop.Infrastructure.Persistence.Migrations
                         .WithMany()
                         .HasForeignKey("SkuId")
                         .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("HKShop.Domain.Sellers.StoreApplication", b =>
+                {
+                    b.HasOne("HKShop.Domain.Sellers.Seller", null)
+                        .WithMany()
+                        .HasForeignKey("SellerId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HKShop.Infrastructure.Persistence.ShopUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("HKShop.Domain.Sellers.StoreApplicationVerification", b =>
+                {
+                    b.HasOne("HKShop.Domain.Sellers.StoreApplication", null)
+                        .WithOne()
+                        .HasForeignKey("HKShop.Domain.Sellers.StoreApplicationVerification", "ApplicationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("HKShop.Domain.Sellers.StoreVerificationDocument", b =>
+                {
+                    b.HasOne("HKShop.Domain.Sellers.StoreApplicationVerification", null)
+                        .WithMany()
+                        .HasForeignKey("ApplicationId")
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
 
@@ -3285,8 +3429,6 @@ namespace HKShop.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("HKShop.Domain.Orders.SellerOrder", b =>
                 {
                     b.Navigation("Shipment");
-
-                    b.Navigation("Transport");
                 });
 
             modelBuilder.Entity("HKShop.Domain.Settlement.LedgerJournal", b =>

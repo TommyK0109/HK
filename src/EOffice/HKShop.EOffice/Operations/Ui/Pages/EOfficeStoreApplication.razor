@@ -1,0 +1,91 @@
+@page "/eoffice/sellers/applications/{Id:guid}"
+@layout EOfficeLayout
+@attribute [Authorize(Policy = ShopPolicies.EOfficeAdmin)]
+@inject IStoreApplicationReview Applications
+@inject IShopRequestContext Request
+
+<PageTitle>Store application · HKShop EOffice</PageTitle>
+<a class="back" href="/eoffice/sellers">← Store management</a>
+
+@if (application is null)
+{
+    <h1>Application not found</h1>
+}
+else
+{
+    <h1>@application.Summary.StoreName</h1>
+    <p>@application.Summary.Email · @application.Summary.Status · @ShopDisplay.Date(application.Summary.SubmittedAt)</p>
+    @if (application.Summary.DeclineReason is not null)
+    {
+        <p>@application.Summary.DeclineReason</p>
+    }
+
+    <section class="panel">
+        <h2>Verification</h2>
+        @if (application.NationalId is not null)
+        {
+            <p>National ID number <strong>@application.NationalId</strong></p>
+            <p>Business license number <strong>@application.BusinessLicenseNumber</strong></p>
+            <ul>
+                <li><a href="@DocumentPath(StoreDocumentKind.NationalIdFront)">Download national ID front</a></li>
+                <li><a href="@DocumentPath(StoreDocumentKind.NationalIdBack)">Download national ID back</a></li>
+                <li><a href="@DocumentPath(StoreDocumentKind.BusinessLicense)">Download business license</a></li>
+            </ul>
+        }
+        else
+        {
+            <p>Verification documents were removed when the store closed.</p>
+        }
+    </section>
+
+    <section class="panel top-space">
+        <h2>Product summary</h2>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th scope="col">Product</th><th scope="col">Price</th></tr></thead>
+                <tbody>
+                    @foreach (var product in application.Products.Skip((ProductPage - 1) * PageSize).Take(PageSize))
+                    {
+                        <tr><td>@product.Name</td><td>@ShopDisplay.Money(product.PriceVnd)</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <Pager Current="ProductPage" Last="LastPage" Url="ProductUrl" />
+    </section>
+
+    @if (application.Summary.Status == StoreApplicationStatus.Pending)
+    {
+        <section class="panel top-space">
+            <h2>Decision</h2>
+            <form method="post" action="@DecisionPath">
+                <AntiforgeryToken />
+                <button type="submit" name="decision" value="approve" class="button">Approve application</button>
+            </form>
+            <form class="form-stack top-space" method="post" action="@DecisionPath">
+                <AntiforgeryToken />
+                <label>Decline reason <textarea name="reason" maxlength="250" required></textarea></label>
+                <button type="submit" name="decision" value="decline" class="button secondary">Decline application</button>
+            </form>
+        </section>
+    }
+}
+
+@code {
+    private const int PageSize = 25;
+    [Parameter] public Guid Id { get; set; }
+    [SupplyParameterFromQuery] public int? Page { get; set; }
+    private StoreApplicationReview? application;
+    private int LastPage => Math.Max(1, ((application?.Products.Count ?? 0) + PageSize - 1) / PageSize);
+    private int ProductPage => Math.Clamp(Page ?? 1, 1, LastPage);
+    private string DecisionPath => $"/api/eoffice/store-applications/{Id:D}/decision";
+    private string DocumentPath(StoreDocumentKind kind) => $"/api/eoffice/store-applications/{Id:D}/documents/{kind}";
+    private string ProductUrl(int page) => $"/eoffice/sellers/applications/{Id:D}?page={page}";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        Request.Context.Response.Headers.CacheControl = "no-store";
+        application = await Applications.Details(await Request.Actor(), Id);
+        if (application is null) Request.Context.Response.StatusCode = 404;
+    }
+}

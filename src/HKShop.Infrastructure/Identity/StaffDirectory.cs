@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Data;
 using HKShop.Application;
 using HKShop.Application.Accounts;
+using HKShop.Contracts.Ports;
 using HKShop.Domain;
 using HKShop.Domain.Orders;
 using HKShop.Infrastructure.Persistence;
@@ -11,7 +12,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace HKShop.Infrastructure.Identity;
 
-public sealed class StaffDirectory(UserManager<ShopUser> users, ShopDbContext db, TimeProvider time) : IStaffDirectory
+public sealed class StaffDirectory(UserManager<ShopUser> users, ShopDbContext db, TimeProvider time,
+    IShippingCommerceCallbackPort commerce) : IStaffDirectory
 {
     public async Task<Page<StaffAccount>> Browse(ShopActor actor, string? search, int page)
     {
@@ -83,6 +85,8 @@ public sealed class StaffDirectory(UserManager<ShopUser> users, ShopDbContext db
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         var user = await users.FindByIdAsync(id) ?? throw new ShopRuleException("Cannot find account.");
         var existing = await users.GetRolesAsync(user);
+        if (role == "Shipper" && (!disabled || !existing.Contains(role)))
+            await commerce.RequireShipperEligibilityAsync(new SqlShopStore.Session(db), id);
         if (existing.Contains("Admin") && !user.Disabled && (disabled || role != "Admin") &&
             (await users.GetUsersInRoleAsync("Admin")).Count(u => !u.Disabled) <= 1)
             throw new ShopRuleException("Admin not allowed to be disabled.");

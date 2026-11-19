@@ -24,16 +24,16 @@ else if (workspace is not null)
         <div><h1>@workspace.DisplayName</h1><p class="muted">@workspace.Slug · @ShopDisplay.Role(workspace.Role)</p></div>
         <span class="status">@ShopDisplay.Status(workspace.Status)</span>
     </div>
-    @if (workspace.Status == SellerStatus.Pending)
-    {
-        <p>HKShop is reviewing the store registration.</p>
-    }
-    else if (workspace.Status == SellerStatus.Suspended)
+    @if (workspace.Status == SellerStatus.Suspended)
     {
         <p>This store has been suspended. Contact HKShop for assistance.</p>
     }
     else
     {
+        @if (workspace.Status == SellerStatus.Closed)
+        {
+            <p>This store is closed. You can still manage existing orders, returns, and settlements.</p>
+        }
         @if (CanManageCatalog || workspace.Allows(SellerPermission.Finance) || workspace.Allows(SellerPermission.Fulfillment))
         {
             <nav class="section-nav" aria-label="Store">
@@ -119,6 +119,18 @@ else if (workspace is not null)
                 </section>
             </div>
         }
+    }
+    @if (SellerId != Seller.FirstPartyId && workspace.Role == SellerRole.Owner && workspace.Status != SellerStatus.Closed)
+    {
+        <details class="editor top-space">
+            <summary>Close store</summary>
+            <form class="form-stack" method="post" action="@($"/api/commerce/seller/{SellerId}/close")">
+                <AntiforgeryToken />
+                <p>Closing permanently stops new sales and removes the verification numbers and documents for this store.</p>
+                <label><input type="checkbox" name="confirm" value="true" required /> Confirm permanent closure</label>
+                <button type="submit" class="button secondary">Close store</button>
+            </form>
+        </details>
     }
 }
 

@@ -10,7 +10,7 @@ namespace HKShop.Commerce.Api;
 [Route("payments/sepay")]
 public sealed class SePayController(ISePayWebhookHandler gateway, PaymentService payments, ILogger<SePayController> logger) : Controller
 {
-    [HttpPost("ipn"), AllowAnonymous, IgnoreAntiforgeryToken, RequestSizeLimit(32 * 1024)]
+    [HttpPost("ipn"), AllowAnonymous, IgnoreAntiforgeryToken, SkipStatusCodePages, RequestSizeLimit(32 * 1024)]
     public async Task<IActionResult> Ipn([FromBody] JsonElement body)
     {
         if (!Request.Headers.TryGetValue("X-Secret-Key", out var secret) || secret.Count != 1 || !gateway.Authenticate(secret.ToString()))
